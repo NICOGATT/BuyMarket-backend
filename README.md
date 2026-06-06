@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
@@ -97,7 +96,6 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
-=======
 # Buy Market
 
 Buy Market es una aplicación multiplataforma para Android, iOS y web orientada a la compra, venta y entrega de productos entre usuarios. La propuesta combina un marketplace de productos, similar a Mercado Libre, con un sistema de entregas rápidas o programadas, similar a PedidosYa.
@@ -936,4 +934,3 @@ Luego se puede agregar:
 - Gestión avanzada de reclamos con IA.
 - Retiros automáticos semanales.
 - Calificaciones y reputación avanzada.
->>>>>>> 972bff7d420dfbb581dcbcfa2a38688454dfd636
