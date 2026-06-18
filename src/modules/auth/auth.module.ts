@@ -9,10 +9,12 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 import { User } from '../users/entity/user.entity';
+import { Wallet } from '../wallet/entity/wallet.entity';
+import { Plan } from '../plan/entities/plan.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, Plan, Wallet,]),
 
     PassportModule,
 

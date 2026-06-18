@@ -10,6 +10,10 @@ import {
 
 import { User } from '../../users/entity/user.entity';
 import { CartItem } from '../../carts/entities/cart-item.entity/cart-item.entity';
+import { Category } from '../../categories/entities/category.entity';
+import { ProductMedia } from '../product-media/entities/product-media.entity';
+import { SubCategory } from '../../subcategoria/entities/subcategoria.entity';
+import { ProductAttributeValue } from './product-attributes-value.entity';
 
 @Entity('products')
 export class Product {
@@ -32,11 +36,20 @@ export class Product {
   @Column({ type: 'int', default: 0 })
   stock!: number;
 
-  @Column({ type: 'varchar', length: 100 })
-  category!: string;
+  @ManyToOne(() => Category, (category) => category.products, {
+    nullable: false, 
+    eager : true,
+  })
+  category! : Category;
+  @ManyToOne(() => SubCategory, subCategory => subCategory.products, {
+  nullable: true,
+  })
+  subCategory?: SubCategory;
 
-  @Column('text', { array: true, default: [] })
-  images!: string[];
+  @OneToMany(() => ProductMedia, media => media.product, {
+    cascade: true,
+  })
+  media!: ProductMedia[];
 
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;
@@ -49,6 +62,15 @@ export class Product {
 
   @OneToMany(() => CartItem, (item) => item.product)
   cartItems! : CartItem[];
+
+  @OneToMany(
+    () => ProductAttributeValue,
+    value => value.product,
+    {
+      cascade: true,
+    },
+  )
+  attributeValues!: ProductAttributeValue[];
   
   @CreateDateColumn()
   createdAt!: Date;

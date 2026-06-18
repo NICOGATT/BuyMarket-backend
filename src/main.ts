@@ -6,7 +6,20 @@ import { Reflector } from '@nestjs/core';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors();
+  app.enableCors({
+    origin: [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://192.168.0.213:5173',
+    ],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'ngrok-skip-browser-warning',
+    ],
+    credentials: true,
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({

@@ -8,12 +8,28 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CartsModule } from './modules/carts/carts.module';
 import { FavoritesModule } from './modules/favorites/favorites.module';
 
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
+import { OrdersModule } from './modules/orders/orders.module';
+import { CategoriesModule } from './modules/categories/categories.module';
+import { CategorySuggestionsModule } from './modules/category-suggestions/category-suggestions.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { ProductMediaModule } from './modules/products/product-media/product-media.module';
+import { SubCategoriesModule } from './modules/subcategoria/subcategoria.module';
+import { SubCategoryAttributesModule } from './modules/subcategoria/subcategoria-attributes/subcategoria-attributes.module';
+import { PlansModule } from './modules/plan/plan.module';
+import { WalletsModule } from './modules/wallet/wallet.module';
+import { WalletTransactionModule } from './modules/wallet-transaction/wallet-transaction.module';
+import { WithDrawalRequestModule } from './modules/with-drawal-request/with-drawal-request.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -33,6 +49,17 @@ import { FavoritesModule } from './modules/favorites/favorites.module';
     AuthModule,
     CartsModule,
     FavoritesModule,
+    OrdersModule,
+    CategoriesModule,
+    CategorySuggestionsModule,
+    PaymentsModule,
+    ProductMediaModule,
+    SubCategoriesModule,
+    SubCategoryAttributesModule,
+    PlansModule,
+    WalletsModule,
+    WalletTransactionModule,
+    WithDrawalRequestModule,
   ],
 })
 export class AppModule {}

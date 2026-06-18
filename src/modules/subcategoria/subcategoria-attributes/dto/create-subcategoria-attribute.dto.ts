@@ -1,0 +1,30 @@
+import {
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from 'class-validator';
+
+import { AttributeType } from '../entities/subcategoria-attribute.entity';
+
+export class CreateSubCategoryAttributeDto {
+  @IsString()
+  name!: string;
+
+  @IsEnum(AttributeType)
+  type!: AttributeType;
+
+  @IsBoolean()
+  @IsOptional()
+  required?: boolean;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  options?: string[];
+
+  @IsUUID()
+  subCategoryId!: string;
+}

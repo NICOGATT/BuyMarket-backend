@@ -5,9 +5,12 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  ManyToOne,
 } from 'typeorm';
 
 import { Product } from '../../products/entity/product.entity';
+import { Wallet } from '../../wallet/entity/wallet.entity';
+import { Plan } from '../../plan/entities/plan.entity';
 
 export enum UserRole {
   USER = 'user',
@@ -21,7 +24,10 @@ export class User {
   id!: string;
 
   @Column({ type: 'varchar', length: 100 })
-  name!: string;
+  firstName!: string;
+
+  @Column({type: 'varchar', length : 100})
+  lastName!: string; 
 
   @Column({ type: 'varchar', length: 150, unique: true })
   email!: string;
@@ -38,6 +44,15 @@ export class User {
 
   @OneToMany(() => Product, (product) => product.seller)
   products!: Product[];
+
+  @ManyToOne(() => Wallet, wallet => wallet.user)
+  wallet!: Wallet
+
+  @ManyToOne(() => Plan, plan => plan.users, {
+    nullable : true,
+    eager : true
+  })
+  plan! : Plan;
 
   @CreateDateColumn()
   createdAt!: Date;

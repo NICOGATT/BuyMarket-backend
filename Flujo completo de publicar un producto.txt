@@ -1,0 +1,14 @@
+1. Cliente elige categoría
+2. Cliente sube imágenes/videos
+3. Cliente elige subcategoría(Si hay una subcategoria que no este aprobada con anterioridad que aparezca un mensaje de alerta "Esta publicación va a quedar pendiente de aprobación,
+podes finalizarla y en menos de 24 horas va a estar circulando") 
+4. Cliente completa:
+   - título
+   - descripción
+   - precio
+   - stock
+5. Front pide atributos de esa subcategoría
+6. Front renderiza inputs dinámicos
+
+7. Se crea el producto
+8. Se guardan los SubcategoryAttributeValues

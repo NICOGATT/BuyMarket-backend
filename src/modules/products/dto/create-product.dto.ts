@@ -5,42 +5,53 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  IsUUID,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
-export class CreateProductDto {
-    @IsString()
-    @IsNotEmpty()
-    title! : string;
+import { Type } from 'class-transformer';
 
-    @IsString()
-    @IsNotEmpty()
-    description! : string;
+class CreateProductAttributeValueDto {
+  @IsUUID()
+  attributeId!: string;
 
-    @IsNumber()
-    @IsPositive()
-    price! : number;
-
-    @IsNumber()
-    @Min(0)
-    stock! : number;
-
-    @IsString()
-    category! : string;
-
-    @IsString()
-    @IsNotEmpty()
-    direccionRetiro! : string;
-
-    @IsString()
-    @IsNotEmpty()
-    horarioDisponible! : string;
-
-    @IsOptional()
-    @IsArray()
-    images! : string[];
-
-    @IsString()
-    owner! : string;
+  @IsString()
+  @IsNotEmpty()
+  value!: string;
 }
 
+export class CreateProductDto {
+  @IsString()
+  @IsNotEmpty()
+  title!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  description!: string;
+
+  @IsNumber()
+  @IsPositive()
+  price!: number;
+
+  @IsNumber()
+  @Min(0)
+  stock!: number;
+
+  @IsUUID()
+  seller!: string;
+
+  @IsUUID()
+  subCategoryId!: string;
+
+  @IsArray()
+  @IsUUID('4', { each: true })
+  @IsOptional()
+  mediaIds?: string[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductAttributeValueDto)
+  @IsOptional()
+  attributes?: CreateProductAttributeValueDto[];
+}
