@@ -198,32 +198,40 @@ export class ProductsService {
 
   async uploadProductMedia(
     productId: string,
-    file: Express.Multer.File,
+    files: Express.Multer.File[],
   ) {
     const product = await this.productsRepository.findOne({
       where: { id: productId },
     });
-    const mediaType = file.mimetype.startsWith('video/')
-      ? ProductMediaType.VIDEO
-      : ProductMediaType.IMAGE;
-        if (!product) {
-          throw new NotFoundException('Producto no encontrado');
-        }
 
-    const uploaded = await this.cloudinaryService.uploadFile(
-      file,
-      'buymarket/products',
-      mediaType
-    );
+    if (!product) {
+      throw new NotFoundException('Producto no encontrado');
+    }
 
-    const media = this.productMediaRepository.create({
-      url: uploaded.secure_url,
-      publicId: uploaded.public_id,
-      type: mediaType,
-      product: product,
-    });
+    const mediaItems : ProductMedia[] = [];
 
-    return this.productMediaRepository.save(media);
+    for (const file of files) {
+      const mediaType = file.mimetype.startsWith('video/')
+        ? ProductMediaType.VIDEO
+        : ProductMediaType.IMAGE;
+
+      const uploaded = await this.cloudinaryService.uploadFile(
+        file,
+        'buymarket/products',
+        mediaType,
+      );
+
+      const media = this.productMediaRepository.create({
+        url: uploaded.secure_url,
+        publicId: uploaded.public_id,
+        type: mediaType,
+        product,
+      });
+
+      mediaItems.push(media);
+    }
+
+    return this.productMediaRepository.save(mediaItems);
   }
 
   async findMyProducts(userId : string) {
