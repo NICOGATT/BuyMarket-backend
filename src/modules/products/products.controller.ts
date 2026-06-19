@@ -67,7 +67,7 @@ export class ProductsController {
   }))
   uploadProductMedia(
     @Param('id', ParseIntPipe) id: string,
-    @UploadedFiles() files: Express.Multer.File[],
+    @UploadedFiles() files: Express.Multer.File,
   ) {
     return this.productsService.uploadProductMedia(id, files);
   }
