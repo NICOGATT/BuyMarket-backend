@@ -10,7 +10,7 @@ import { SubCategoryAttribute } from '../subcategoria/subcategoria-attributes/en
 
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
-
+import { UserAddress } from '../user-address/entities/user-address.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -20,6 +20,7 @@ import { ProductsService } from './products.service';
       ProductMedia,
       SubCategoryAttribute,
       ProductAttributeValue,
+      UserAddress
     ]),
   ],
   controllers: [ProductsController],

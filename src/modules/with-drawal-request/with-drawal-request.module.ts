@@ -1,9 +1,21 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+
+import { Wallet } from '../wallet/entity/wallet.entity';
+import { WithdrawalRequest } from './entities/with-drawal-request.entity';
+
+import { WithdrawalRequestsController } from './with-drawal-request.controller';
 import { WithDrawalRequestService } from './with-drawal-request.service';
-import { WithDrawalRequestController } from './with-drawal-request.controller';
 
 @Module({
-  controllers: [WithDrawalRequestController],
+  imports: [
+    TypeOrmModule.forFeature([
+      Wallet,
+      WithdrawalRequest,
+    ]),
+  ],
+  controllers: [WithdrawalRequestsController],
   providers: [WithDrawalRequestService],
+  exports: [WithDrawalRequestService],
 })
-export class WithDrawalRequestModule {}
+export class WithdrawalRequestsModule {}

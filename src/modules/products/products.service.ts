@@ -10,6 +10,7 @@ import { Category } from '../categories/entities/category.entity';
 import { ProductMedia, ProductMediaType } from './product-media/entities/product-media.entity';
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
 import { SubCategory } from '../subcategoria/entities/subcategoria.entity';
+import { UserAddress } from '../user-address/entities/user-address.entity';
 
 @Injectable()
 export class ProductsService {
@@ -24,24 +25,41 @@ export class ProductsService {
     private readonly productAttributeValueRepository : Repository<ProductAttributeValue>,
     @InjectRepository(SubCategory)
     private readonly subCategoryRepository: Repository<SubCategory>,
-
+    @InjectRepository(UserAddress)
+    private readonly userAddressRepository : Repository<UserAddress>,
   ) {}
 
-async create(createProductDto: CreateProductDto) {
-  const subCategory = await this.subCategoryRepository.findOne({
-    where: {
-      id: createProductDto.subCategoryId,
-    },
-    relations: {
-      category: true,
-      attributes: true,
-    },
-  });
+  async create(createProductDto: CreateProductDto) {
+    let pickupAddress : UserAddress | null = null; 
+    const subCategory = await this.subCategoryRepository.findOne({
+      where: {
+        id: createProductDto.subCategoryId,
+      },
+      relations: {
+        category: true,
+        attributes: true,
+      },
+    });
 
-  if (!subCategory) {
-    throw new NotFoundException('Subcategoría no encontrada');
-  }
+    if (!subCategory) {
+      throw new NotFoundException('Subcategoría no encontrada');
+    }
 
+    if(createProductDto.pickupAddressId){
+      pickupAddress = await this.userAddressRepository.findOne({
+        where : {
+          id : createProductDto.pickupAddressId, 
+          user : {
+            id : createProductDto.seller
+          }
+        }
+      })
+        if (!pickupAddress) {
+          throw new BadRequestException(
+              'La dirección no existe o no pertenece al usuario',
+          );
+        }
+    }
     const product = this.productsRepository.create({
       title: createProductDto.title,
       description: createProductDto.description,
@@ -52,6 +70,7 @@ async create(createProductDto: CreateProductDto) {
       seller: {
         id: createProductDto.seller,
       },
+      pickupAddress
     });
 
     const savedProduct = await this.productsRepository.save(product);

@@ -11,6 +11,7 @@ import {
 import { Product } from '../../products/entity/product.entity';
 import { Wallet } from '../../wallet/entity/wallet.entity';
 import { Plan } from '../../plan/entities/plan.entity';
+import { UserAddress } from '../../user-address/entities/user-address.entity';
 
 export enum UserRole {
   USER = 'user',
@@ -54,6 +55,9 @@ export class User {
   })
   plan! : Plan;
 
+  @OneToMany(() => UserAddress, address => address.user)
+  addresses! : UserAddress[]
+  
   @CreateDateColumn()
   createdAt!: Date;
 

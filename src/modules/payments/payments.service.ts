@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Or, Repository } from 'typeorm';
-import { Order, OrderStatus } from '../orders/entities/order.entity';
+import { Repository } from 'typeorm';
+import { Order, OrderStatus, PaymentMethod } from '../orders/entities/order.entity';
+import { WalletService } from '../wallet/wallet.service';
 
 @Injectable()
 export class PaymentsService {
@@ -14,6 +15,8 @@ export class PaymentsService {
 
         @InjectRepository(Order)
         private readonly orderRepository : Repository<Order>,
+
+        private readonly walletService: WalletService,
     ) {
         this.client = new MercadoPagoConfig({
             accessToken : this.configService.get<string>('MP_ACCESS_TOKEN')!,
@@ -37,7 +40,27 @@ export class PaymentsService {
             throw new NotFoundException('Orden no encontrada'); 
         }
 
+        if (order.status !== OrderStatus.PENDING) {
+            throw new BadRequestException('La orden no esta pendiente de pago');
+        }
+
+        if (order.paymentMethod !== PaymentMethod.MERCADO_PAGO) {
+            throw new BadRequestException('La orden no usa Mercado Pago como metodo de pago');
+        }
+
         const preference = new Preference(this.client); 
+
+        const successUrl = this.configService.get<string>('FRONTEND_SUCCESS_URL');
+        const failureUrl = this.configService.get<string>('FRONTEND_FAILURE_URL');
+        const pendingUrl = this.configService.get<string>('FRONTEND_PENDING_URL');
+
+        const backUrls = successUrl && failureUrl && pendingUrl
+            ? {
+                success: successUrl,
+                failure: failureUrl,
+                pending: pendingUrl,
+            }
+            : undefined;
 
         const result = await preference.create({
             body : {
@@ -58,6 +81,8 @@ export class PaymentsService {
                 },
 
                 notification_url : `${this.configService.get<string>('BACKEND_URL')}/payments/mercadopago/webhook`, 
+
+                ...(backUrls ? { back_urls: backUrls } : {}),
 
                 metadata : {
                     orderId : order.id, 
@@ -97,7 +122,12 @@ export class PaymentsService {
         }
 
         const order = await this.orderRepository.findOne({
-            where : {id : orderId}
+            where : {id : orderId},
+            relations : [
+                'items',
+                'items.product',
+                'items.product.seller',
+            ],
         })
 
         if(!order){
@@ -106,6 +136,11 @@ export class PaymentsService {
 
         order.paymentId = String(payment.id); 
         order.paymentStatus = payment.status ?? undefined; 
+
+        if (order.status === OrderStatus.PAID) {
+            await this.orderRepository.save(order);
+            return {received : true};
+        }
 
         if (payment.status === 'approved') {
             order.status = OrderStatus.PAID;
@@ -120,6 +155,44 @@ export class PaymentsService {
         }
 
         await this.orderRepository.save(order);
+
+        if (payment.status === 'approved') {
+            await this.creditSellersFromOrder(order);
+        }
+
         return {received : true};
+    }
+
+    private async creditSellersFromOrder(order: Order) {
+        const amountsBySeller = new Map<
+            string,
+            { amount: number; commissionPercentage: number }
+        >();
+
+        for (const item of order.items ?? []) {
+            const seller = item.product?.seller;
+
+            if (!seller?.id) {
+                continue;
+            }
+
+            const subtotal = Number(item.subtotal ?? Number(item.unitPrice) * item.quantity);
+            const current = amountsBySeller.get(seller.id);
+            const commissionPercentage = Number(seller.plan?.commissionPercentage ?? 0);
+
+            amountsBySeller.set(seller.id, {
+                amount: (current?.amount ?? 0) + subtotal,
+                commissionPercentage,
+            });
+        }
+
+        for (const [sellerId, data] of amountsBySeller) {
+            await this.walletService.creditFromOrder({
+                userId: sellerId,
+                orderId: order.id,
+                amount: data.amount,
+                commisionPercentage: data.commissionPercentage,
+            });
+        }
     }
 }

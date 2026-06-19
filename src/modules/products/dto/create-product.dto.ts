@@ -54,4 +54,8 @@ export class CreateProductDto {
   @Type(() => CreateProductAttributeValueDto)
   @IsOptional()
   attributes?: CreateProductAttributeValueDto[];
+
+  @IsUUID()
+  @IsOptional()
+  pickupAddressId?: string;
 }

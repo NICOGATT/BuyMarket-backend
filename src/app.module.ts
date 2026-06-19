@@ -19,8 +19,9 @@ import { SubCategoriesModule } from './modules/subcategoria/subcategoria.module'
 import { SubCategoryAttributesModule } from './modules/subcategoria/subcategoria-attributes/subcategoria-attributes.module';
 import { PlansModule } from './modules/plan/plan.module';
 import { WalletsModule } from './modules/wallet/wallet.module';
-import { WalletTransactionModule } from './modules/wallet-transaction/wallet-transaction.module';
-import { WithDrawalRequestModule } from './modules/with-drawal-request/with-drawal-request.module';
+import { WalletTransactionsModule } from './modules/wallet-transaction/wallet-transaction.module';
+import { WithdrawalRequestsModule } from './modules/with-drawal-request/with-drawal-request.module';
+import { UserAddressesModule } from './modules/user-address/user-address.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -58,8 +59,9 @@ import { WithDrawalRequestModule } from './modules/with-drawal-request/with-draw
     SubCategoryAttributesModule,
     PlansModule,
     WalletsModule,
-    WalletTransactionModule,
-    WithDrawalRequestModule,
+    WalletTransactionsModule,
+    WithdrawalRequestsModule,
+    UserAddressesModule,
   ],
 })
 export class AppModule {}

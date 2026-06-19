@@ -1,4 +1,11 @@
-import { PartialType } from '@nestjs/mapped-types';
-import { CreateWithdrawalRequestDto } from './create-with-drawal-request.dto';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { WithdrawalStatus } from '../entities/with-drawal-request.entity';
 
-export class UpdateWithDrawalRequestDto extends PartialType(CreateWithdrawalRequestDto) {}
+export class UpdateWithdrawalStatusDto {
+  @IsEnum(WithdrawalStatus)
+  status!: WithdrawalStatus;
+
+  @IsString()
+  @IsOptional()
+  adminNote?: string;
+}

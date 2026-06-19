@@ -14,6 +14,7 @@ import { Category } from '../../categories/entities/category.entity';
 import { ProductMedia } from '../product-media/entities/product-media.entity';
 import { SubCategory } from '../../subcategoria/entities/subcategoria.entity';
 import { ProductAttributeValue } from './product-attributes-value.entity';
+import { UserAddress } from '../../user-address/entities/user-address.entity';
 
 @Entity('products')
 export class Product {
@@ -71,6 +72,11 @@ export class Product {
     },
   )
   attributeValues!: ProductAttributeValue[];
+
+  @ManyToOne(() => UserAddress, {
+    nullable : true,
+  })
+  pickupAddress? : UserAddress | null;
   
   @CreateDateColumn()
   createdAt!: Date;
