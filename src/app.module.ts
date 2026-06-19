@@ -22,6 +22,7 @@ import { WalletsModule } from './modules/wallet/wallet.module';
 import { WalletTransactionsModule } from './modules/wallet-transaction/wallet-transaction.module';
 import { WithdrawalRequestsModule } from './modules/with-drawal-request/with-drawal-request.module';
 import { UserAddressesModule } from './modules/user-address/user-address.module';
+import { CloudinaryModule } from './cloudinary/cloudinary.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -62,6 +63,7 @@ import { UserAddressesModule } from './modules/user-address/user-address.module'
     WalletTransactionsModule,
     WithdrawalRequestsModule,
     UserAddressesModule,
+    CloudinaryModule,
   ],
 })
 export class AppModule {}

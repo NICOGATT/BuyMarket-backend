@@ -11,6 +11,7 @@ import { ProductMedia, ProductMediaType } from './product-media/entities/product
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
 import { SubCategory } from '../subcategoria/entities/subcategoria.entity';
 import { UserAddress } from '../user-address/entities/user-address.entity';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 
 @Injectable()
 export class ProductsService {
@@ -27,6 +28,8 @@ export class ProductsService {
     private readonly subCategoryRepository: Repository<SubCategory>,
     @InjectRepository(UserAddress)
     private readonly userAddressRepository : Repository<UserAddress>,
+    
+    private readonly cloudinaryService : CloudinaryService
   ) {}
 
   async create(createProductDto: CreateProductDto) {
@@ -193,27 +196,35 @@ export class ProductsService {
     return await this.productsRepository.remove(product);
   }
 
-  async uploadProductMedia(id: string, files: Express.Multer.File[]) {
-  const product = await this.productsRepository.findOne({
-    where: { id },
-  });
-
-  if (!product) {
-    throw new NotFoundException('Producto no encontrado');
-  }
-
-  const mediaToSave = files.map(file => {
-    const isVideo = file.mimetype.startsWith('video');
-
-    return this.productMediaRepository.create({
-      url: `/uploads/products/${file.filename}`,
-      type: isVideo ? ProductMediaType.VIDEO : ProductMediaType.IMAGE,
-      product,
+  async uploadProductMedia(
+    productId: string,
+    file: Express.Multer.File,
+  ) {
+    const product = await this.productsRepository.findOne({
+      where: { id: productId },
     });
-  });
+    const mediaType = file.mimetype.startsWith('video/')
+      ? ProductMediaType.VIDEO
+      : ProductMediaType.IMAGE;
+        if (!product) {
+          throw new NotFoundException('Producto no encontrado');
+        }
 
-  return this.productMediaRepository.save(mediaToSave);
-}
+    const uploaded = await this.cloudinaryService.uploadFile(
+      file,
+      'buymarket/products',
+      mediaType
+    );
+
+    const media = this.productMediaRepository.create({
+      url: uploaded.secure_url,
+      publicId: uploaded.public_id,
+      type: mediaType,
+      product: product,
+    });
+
+    return this.productMediaRepository.save(media);
+  }
 
   async findMyProducts(userId : string) {
     return await this.productsRepository.find({

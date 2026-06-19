@@ -31,9 +31,14 @@ export class ProductMedia {
   @Column({ default: 0 })
   order!: number;
 
+  @Column()
+  publicId!: string;
+
   @ManyToOne(() => Product, product => product.media, {
     onDelete: 'CASCADE',
     nullable : true
   })
   product?: Product | null;
+
+
 }

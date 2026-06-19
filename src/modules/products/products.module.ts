@@ -11,6 +11,8 @@ import { SubCategoryAttribute } from '../subcategoria/subcategoria-attributes/en
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 import { UserAddress } from '../user-address/entities/user-address.entity';
+
+import { CloudinaryModule } from '../../cloudinary/cloudinary.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -22,6 +24,7 @@ import { UserAddress } from '../user-address/entities/user-address.entity';
       ProductAttributeValue,
       UserAddress
     ]),
+    CloudinaryModule
   ],
   controllers: [ProductsController],
   providers: [ProductsService],
