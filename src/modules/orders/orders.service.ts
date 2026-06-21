@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 
 import { Order, OrderStatus, PaymentMethod } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -13,6 +14,7 @@ import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Product } from '../products/entity/product.entity';
 import { User } from '../users/entity/user.entity';
 import { CheckoutOrderDto } from './dto/checkout-order.dto';
+import { Payment, PaymentStatus } from '../payments/entity/payment.entity';
 
 @Injectable()
 export class OrdersService {
@@ -34,6 +36,11 @@ export class OrdersService {
 
     @InjectRepository(User)
     private readonly userRepository : Repository<User>,
+
+    @InjectRepository(Payment)
+    private readonly paymentRepository : Repository<Payment>,
+
+    private readonly configService: ConfigService,
   ){}
 
   async checkout (userId : string, checkoutDto : CheckoutOrderDto){
@@ -98,6 +105,29 @@ export class OrdersService {
       cart : {id : cart.id},
     });
 
+    if (checkoutDto.paymentMethod === PaymentMethod.TRANSFER) {
+      await this.paymentRepository.save(
+        this.paymentRepository.create({
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.PENDING,
+          amount: total,
+          order: savedOrder,
+        }),
+      );
+
+      const orderWithItems = await this.findOne(savedOrder.id, userId);
+
+      return {
+        ...orderWithItems,
+        transferInfo: {
+          alias: this.configService.get<string>('TRANSFER_ALIAS'),
+          cbu: this.configService.get<string>('TRANSFER_CBU'),
+          amount: total,
+        },
+        message: 'Estamos chequeando la transferencia',
+      };
+    }
+
     return this.findOne(savedOrder.id, userId); 
   }
 
@@ -106,7 +136,7 @@ export class OrdersService {
       where : {
         buyer : {id : userId}
       }, 
-      relations : ['buyer', 'items', 'items.product'], 
+      relations : ['buyer', 'items', 'items.product', 'payment'], 
       order : {
         createdAt : 'DESC'
       }
@@ -119,7 +149,7 @@ export class OrdersService {
         id,
         buyer: { id: userId },
       },
-      relations: ['buyer', 'items', 'items.product'],
+      relations: ['buyer', 'items', 'items.product', 'payment'],
     });
 
     if (!order) {
@@ -136,6 +166,7 @@ export class OrdersService {
       'items',
       'items.product',
       'items.product.seller',
+      'payment',
     ],
     order: {
       createdAt: 'DESC',

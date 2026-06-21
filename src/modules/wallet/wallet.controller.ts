@@ -105,4 +105,12 @@ export class WalletsController {
   syncMissingWallets() {
     return this.walletsService.syncMissingWallets();
   }
+
+
+  @Post('admin/release-available')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  releaseAvailableTransaction() {
+    return this.walletsService.releaseAvailableTransaction()
+  }
 }

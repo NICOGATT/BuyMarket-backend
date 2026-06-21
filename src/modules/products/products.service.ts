@@ -32,6 +32,18 @@ export class ProductsService {
     private readonly cloudinaryService : CloudinaryService
   ) {}
 
+  private removeSellerPassword<T extends Product | Product[]>(products: T): T {
+    const productList = Array.isArray(products) ? products : [products];
+
+    productList.forEach(product => {
+      if (product.seller) {
+        delete (product.seller as { password?: string }).password;
+      }
+    });
+
+    return products;
+  }
+
   async create(createProductDto: CreateProductDto) {
     let pickupAddress : UserAddress | null = null; 
     const subCategory = await this.subCategoryRepository.findOne({
@@ -73,7 +85,8 @@ export class ProductsService {
       seller: {
         id: createProductDto.seller,
       },
-      pickupAddress
+      pickupAddress,
+      horarioDisponible: createProductDto.horarioDisponible,
     });
 
     const savedProduct = await this.productsRepository.save(product);
@@ -136,10 +149,12 @@ export class ProductsService {
   }
 
   async findAll() {
-    return this.productsRepository.find({
+    const products = await this.productsRepository.find({
       relations: {
         category: true,
         subCategory: true,
+        seller: true,
+        pickupAddress: true,
         media: true,
         attributeValues: {
           attribute: true,
@@ -149,6 +164,8 @@ export class ProductsService {
         createdAt: 'DESC',
       },
     });
+
+    return this.removeSellerPassword(products);
   }
 
   async findOne(id: string) {
@@ -157,6 +174,8 @@ export class ProductsService {
       relations: {
         category: true,
         subCategory: true,
+        seller: true,
+        pickupAddress: true,
         media: true,
         attributeValues: {
           attribute: true,
@@ -168,7 +187,7 @@ export class ProductsService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    return product;
+    return this.removeSellerPassword(product);
   }
 
   async update(
@@ -235,16 +254,18 @@ export class ProductsService {
   }
 
   async findMyProducts(userId : string) {
-    return await this.productsRepository.find({
+    const products = await this.productsRepository.find({
       where : {
         seller : {
           id : userId,
         }
       }, 
-      relations : ['seller'], 
+      relations : ['seller', 'pickupAddress'], 
       order : {
         createdAt : 'DESC', 
       }
     })
+
+    return this.removeSellerPassword(products);
   }
 }

@@ -6,6 +6,7 @@ import { ObjectLiteral, Repository } from 'typeorm';
 
 import { Order, OrderStatus, PaymentMethod } from '../orders/entities/order.entity';
 import { WalletService } from '../wallet/wallet.service';
+import { Payment as PaymentEntity, PaymentStatus } from './entity/payment.entity';
 import { PaymentsService } from './payments.service';
 
 const mockPreferenceCreate = jest.fn();
@@ -33,6 +34,7 @@ const createMockRepository = <T extends ObjectLiteral = ObjectLiteral>(): MockRe
 describe('PaymentsService', () => {
   let service: PaymentsService;
   let orderRepository: MockRepository<Order>;
+  let paymentRepository: MockRepository<PaymentEntity>;
   let walletService: jest.Mocked<Pick<WalletService, 'creditFromOrder'>>;
 
   const buyerId = 'bdb0526e-0ee2-473d-8daa-a6e63c811f8f';
@@ -97,6 +99,10 @@ describe('PaymentsService', () => {
 
   beforeEach(async () => {
     orderRepository = createMockRepository<Order>();
+    paymentRepository = {
+      ...createMockRepository<PaymentEntity>(),
+      create: jest.fn((data) => data),
+    };
     walletService = {
       creditFromOrder: jest.fn(),
     };
@@ -125,6 +131,10 @@ describe('PaymentsService', () => {
           useValue: orderRepository,
         },
         {
+          provide: getRepositoryToken(PaymentEntity),
+          useValue: paymentRepository,
+        },
+        {
           provide: WalletService,
           useValue: walletService,
         },
@@ -138,6 +148,7 @@ describe('PaymentsService', () => {
   it('deberia estar definido con sus dependencias mockeadas', () => {
     expect(service).toBeDefined();
     expect(orderRepository).toBeDefined();
+    expect(paymentRepository).toBeDefined();
     expect(walletService).toBeDefined();
   });
 
@@ -389,6 +400,125 @@ describe('PaymentsService', () => {
       expect(orderRepository.save).toHaveBeenCalledWith(order);
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
       expect(result).toEqual({ received: true });
+    });
+  });
+
+  describe('notifyTransferPayment', () => {
+    it('lanza NotFoundException si la orden no existe o no pertenece al usuario', async () => {
+      orderRepository.findOne?.mockResolvedValue(null);
+
+      await expect(
+        service.notifyTransferPayment(orderId, buyerId, {
+          senderAlias: 'comprador.alias',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(paymentRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('guarda el alias del comprador y mantiene el pago pendiente', async () => {
+      const payment = {
+        id: 'payment-1',
+        method: PaymentMethod.TRANSFER,
+        status: PaymentStatus.PENDING,
+        amount: 1500,
+      } as PaymentEntity;
+      const order = createOrder({
+        paymentMethod: PaymentMethod.TRANSFER,
+        payment,
+      });
+      orderRepository.findOne?.mockResolvedValue(order);
+      paymentRepository.save?.mockResolvedValue(payment);
+
+      const result = await service.notifyTransferPayment(orderId, buyerId, {
+        senderAlias: 'comprador.alias',
+        senderCbu: '0000000000000000000000',
+      });
+
+      expect(payment.senderAlias).toBe('comprador.alias');
+      expect(payment.senderCbu).toBe('0000000000000000000000');
+      expect(payment.status).toBe(PaymentStatus.PENDING);
+      expect(paymentRepository.save).toHaveBeenCalledWith(payment);
+      expect(result).toEqual({
+        orderId,
+        paymentStatus: PaymentStatus.PENDING,
+        message: 'Estamos chequeando la transferencia',
+      });
+    });
+  });
+
+  describe('updateTransferPaymentStatus', () => {
+    const createTransferOrder = (paymentStatus = PaymentStatus.PENDING) => {
+      const payment = {
+        id: 'payment-1',
+        method: PaymentMethod.TRANSFER,
+        status: paymentStatus,
+        amount: 1500,
+      } as PaymentEntity;
+
+      return createOrder({
+        paymentMethod: PaymentMethod.TRANSFER,
+        payment,
+      });
+    };
+
+    it('confirma una transferencia, marca la orden como paid y acredita wallets', async () => {
+      const order = createTransferOrder();
+      orderRepository.findOne?.mockResolvedValue(order);
+      orderRepository.save?.mockResolvedValue(order);
+      paymentRepository.save?.mockResolvedValue(order.payment as PaymentEntity);
+      walletService.creditFromOrder.mockResolvedValue({} as never);
+
+      const result = await service.updateTransferPaymentStatus(orderId, {
+        status: PaymentStatus.COMPLETED,
+        adminNote: 'Recibido',
+      });
+
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(order.payment?.status).toBe(PaymentStatus.COMPLETED);
+      expect(order.payment?.adminNote).toBe('Recibido');
+      expect(paymentRepository.save).toHaveBeenCalledWith(order.payment);
+      expect(orderRepository.save).toHaveBeenCalledWith(order);
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({
+        orderId,
+        orderStatus: OrderStatus.PAID,
+        paymentStatus: PaymentStatus.COMPLETED,
+        message: 'Pago confirmado, estamos asignando a un repartidor',
+      });
+    });
+
+    it('rechaza una transferencia sin acreditar wallets', async () => {
+      const order = createTransferOrder();
+      orderRepository.findOne?.mockResolvedValue(order);
+      orderRepository.save?.mockResolvedValue(order);
+      paymentRepository.save?.mockResolvedValue(order.payment as PaymentEntity);
+
+      const result = await service.updateTransferPaymentStatus(orderId, {
+        status: PaymentStatus.REJECTED,
+      });
+
+      expect(order.status).toBe(OrderStatus.REJECTED);
+      expect(order.payment?.status).toBe(PaymentStatus.REJECTED);
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        orderId,
+        orderStatus: OrderStatus.REJECTED,
+        paymentStatus: PaymentStatus.REJECTED,
+        message: 'Transferencia rechazada',
+      });
+    });
+
+    it('no permite procesar dos veces una transferencia', async () => {
+      const order = createTransferOrder(PaymentStatus.COMPLETED);
+      order.status = OrderStatus.PAID;
+      orderRepository.findOne?.mockResolvedValue(order);
+
+      await expect(
+        service.updateTransferPaymentStatus(orderId, {
+          status: PaymentStatus.COMPLETED,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
     });
   });
 });

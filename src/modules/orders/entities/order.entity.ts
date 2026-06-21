@@ -4,26 +4,17 @@ import {
   Entity,
   ManyToOne,
   OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
 import { User } from '../../users/entity/user.entity';
 import { OrderItem } from './order-item.entity';
+import { Payment } from '../../payments/entity/payment.entity';
+import { OrderStatus, PaymentMethod } from './order.enums';
 
-export enum OrderStatus {
-  PENDING = 'pending',
-  PAID = 'paid',
-  CANCELLED = 'cancelled',
-  DELIVERED = 'delivered',
-  REJECTED = 'rejected'
-}
-
-export enum PaymentMethod {
-  MERCADO_PAGO = 'mercado_pago',
-  CASH = 'cash',
-  TRANSFER = 'transfer',
-}
+export { OrderStatus, PaymentMethod } from './order.enums';
 
 @Entity('orders')
 export class Order {
@@ -86,6 +77,9 @@ export class Order {
     nullable : true, 
   })
   paymentStatus? : string; 
+
+  @OneToOne(() => Payment, (payment) => payment.order)
+  payment? : Payment; 
 
   @CreateDateColumn()
   createdAt!: Date;

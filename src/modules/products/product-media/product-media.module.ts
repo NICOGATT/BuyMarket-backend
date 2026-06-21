@@ -6,6 +6,7 @@ import { Product } from '../entity/product.entity';
 
 import { ProductMediaController } from './product-media.controller';
 import { ProductMediaService } from './product-media.service';
+import { CloudinaryModule } from '../../../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { ProductMediaService } from './product-media.service';
       ProductMedia,
       Product,
     ]),
+    CloudinaryModule
   ],
   controllers: [ProductMediaController],
   providers: [ProductMediaService],

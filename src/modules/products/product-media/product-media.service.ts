@@ -11,6 +11,7 @@ import {
 } from './entities/product-media.entity';
 
 import { Product } from '../entity/product.entity';
+import { CloudinaryService } from '../../../cloudinary/cloudinary.service';
 
 @Injectable()
 export class ProductMediaService {
@@ -20,22 +21,34 @@ export class ProductMediaService {
 
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    private readonly cloudinaryService : CloudinaryService
   ) {}
 
-  async uploadFiles(files: Express.Multer.File[]) {
-    const media = files.map(file => {
-      const type = file.mimetype.startsWith('video')
+  async uploadMedia(files: Express.Multer.File[]) {
+    const mediaItems: ProductMedia[] = [];
+
+    for (const file of files) {
+      const mediaType = file.mimetype.startsWith('video/')
         ? ProductMediaType.VIDEO
         : ProductMediaType.IMAGE;
 
-      return this.mediaRepository.create({
-        url: `/uploads/products/${file.filename}`,
-        type,
+      const uploaded = await this.cloudinaryService.uploadFile(
+        file,
+        'buymarket/products',
+        mediaType,
+      );
+
+      const media = this.mediaRepository.create({
+        url: uploaded.secure_url,
+        publicId: uploaded.public_id,
+        type: mediaType,
         product: null,
       });
-    });
 
-    return this.mediaRepository.save(media);
+      mediaItems.push(media);
+    }
+
+    return this.mediaRepository.save(mediaItems);
   }
 
   async findAll() {

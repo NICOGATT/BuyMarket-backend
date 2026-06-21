@@ -8,7 +8,17 @@ describe('PaymentsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
-      providers: [PaymentsService],
+      providers: [
+        {
+          provide: PaymentsService,
+          useValue: {
+            createMercadoPagoPreference: jest.fn(),
+            handleMercadoPagoWebhook: jest.fn(),
+            notifyTransferPayment: jest.fn(),
+            updateTransferPaymentStatus: jest.fn(),
+          },
+        },
+      ],
     }).compile();
 
     controller = module.get<PaymentsController>(PaymentsController);

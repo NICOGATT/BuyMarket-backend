@@ -17,7 +17,8 @@ import {
   WithdrawalStatus,
 } from '../with-drawal-request/entities/with-drawal-request.entity';
 import { User } from '../users/entity/user.entity';
-
+import { LessThanOrEqual } from 'typeorm';
+import { release } from 'os';
 
 @Injectable()
 export class WalletService {
@@ -258,5 +259,71 @@ export class WalletService {
             message: 'Wallets sincronizadas correctamente',
             created: wallets.length,
         };
+    }
+
+    async creditPendingFromOrder(params: {
+        userId : string; 
+        orderId : string; 
+        amount : number; 
+        commissionPercetage : number; 
+        mercadoPagoPaymentId? : string; 
+        realeaseDate? : Date; 
+    }) {
+        const wallet = await this.findByUserId(params.userId); 
+
+        const commissionAmount = params.amount * (params.commissionPercetage / 100); 
+
+        const netAmount = params.amount - commissionAmount; 
+
+        wallet.pendingBalance = Number(wallet.pendingBalance) + Number(netAmount);
+
+        wallet.totalEarned = Number(wallet.totalEarned) + Number(netAmount); 
+
+        await this.walletsRepository.save(wallet); 
+
+        const transaction = this.transactionRepository.create({
+            wallet, 
+            order : {
+                id : params.orderId
+            } as any, 
+            type : WalletTransactionType.CREDIT, 
+            amount : params.amount, 
+            commissionAmount, 
+            netAmount, 
+            status : WalletTransactionStatus.PENDING, 
+            mercadoPagoPaymentId : params.mercadoPagoPaymentId, 
+            releaseDate : params.realeaseDate
+        })
+
+        return this.transactionRepository.save(transaction);
+    }
+
+    async releaseAvailableTransaction(){
+        const now = new Date(); 
+
+        const transactions = await this.transactionRepository.find({
+            where : {
+                status : WalletTransactionStatus.PENDING, 
+                releaseDate : LessThanOrEqual(now)
+            }, 
+            relations : {
+                wallet : true, 
+            }
+        })
+
+        for(const transaction of transactions) {
+            transaction.wallet.pendingBalance = Number(transaction.wallet.pendingBalance) - Number(transaction.netAmount); 
+
+            transaction.wallet.balance = Number(transaction.wallet.balance) + Number(transaction.netAmount);
+
+            transaction.status = WalletTransactionStatus.COMPLETED; 
+
+            await this.walletsRepository.save(transaction.wallet); 
+            await this.transactionRepository.save(transaction)
+        }
+
+        return {
+            release : transactions.length, 
+        }
     }
 }

@@ -74,6 +74,12 @@ export class WalletTransaction {
   })
   status!: WalletTransactionStatus;
 
+  @Column({type : "timestamp", nullable : true})
+  releaseDate? : Date | null; 
+
+  @Column({type : "varchar", nullable : true})
+  mercadoPagoPaymentId? : string | null; 
+
   @CreateDateColumn()
   createdAt!: Date;
 }

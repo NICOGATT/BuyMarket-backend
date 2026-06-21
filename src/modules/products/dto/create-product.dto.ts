@@ -58,4 +58,8 @@ export class CreateProductDto {
   @IsUUID()
   @IsOptional()
   pickupAddressId?: string;
+
+  @IsString()
+  @IsOptional()
+  horarioDisponible?: string;
 }

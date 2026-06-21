@@ -1,10 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
+import { MercadoPagoConfig, Payment as MercadoPagoPayment, Preference } from 'mercadopago';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Order, OrderStatus, PaymentMethod } from '../orders/entities/order.entity';
 import { WalletService } from '../wallet/wallet.service';
+import { Payment as PaymentEntity, PaymentStatus } from './entity/payment.entity';
+import { NotifyTransferPaymentDto } from './dto/notify-transfer-payment.dto';
+import { UpdateTransferPaymentStatusDto } from './dto/update-transfer-payment-status.dto';
 
 @Injectable()
 export class PaymentsService {
@@ -15,6 +18,9 @@ export class PaymentsService {
 
         @InjectRepository(Order)
         private readonly orderRepository : Repository<Order>,
+
+        @InjectRepository(PaymentEntity)
+        private readonly paymentRepository : Repository<PaymentEntity>,
 
         private readonly walletService: WalletService,
     ) {
@@ -109,7 +115,7 @@ export class PaymentsService {
             return {received : true}
         }
 
-        const paymentClient = new Payment(this.client); 
+        const paymentClient = new MercadoPagoPayment(this.client); 
 
         const payment = await paymentClient.get({
             id : paymentId,
@@ -161,6 +167,117 @@ export class PaymentsService {
         }
 
         return {received : true};
+    }
+
+    async notifyTransferPayment(
+        orderId: string,
+        userId: string,
+        dto: NotifyTransferPaymentDto,
+    ) {
+        const order = await this.orderRepository.findOne({
+            where: {
+                id: orderId,
+                buyer: { id: userId },
+            },
+            relations: ['payment'],
+        });
+
+        if (!order) {
+            throw new NotFoundException('Orden no encontrada');
+        }
+
+        if (order.paymentMethod !== PaymentMethod.TRANSFER) {
+            throw new BadRequestException('La orden no usa transferencia como metodo de pago');
+        }
+
+        if (order.status !== OrderStatus.PENDING) {
+            throw new BadRequestException('La orden ya fue procesada');
+        }
+
+        const payment = order.payment ?? this.paymentRepository.create({
+            method: PaymentMethod.TRANSFER,
+            status: PaymentStatus.PENDING,
+            amount: Number(order.total),
+            order,
+        });
+
+        if (payment.status !== PaymentStatus.PENDING) {
+            throw new BadRequestException('El pago ya fue procesado');
+        }
+
+        payment.senderAlias = dto.senderAlias;
+        payment.senderCbu = dto.senderCbu;
+
+        await this.paymentRepository.save(payment);
+
+        return {
+            orderId: order.id,
+            paymentStatus: payment.status,
+            message: 'Estamos chequeando la transferencia',
+        };
+    }
+
+    async updateTransferPaymentStatus(
+        orderId: string,
+        dto: UpdateTransferPaymentStatusDto,
+    ) {
+        const order = await this.orderRepository.findOne({
+            where: { id: orderId },
+            relations: [
+                'payment',
+                'items',
+                'items.product',
+                'items.product.seller',
+            ],
+        });
+
+        if (!order) {
+            throw new NotFoundException('Orden no encontrada');
+        }
+
+        if (order.paymentMethod !== PaymentMethod.TRANSFER) {
+            throw new BadRequestException('La orden no usa transferencia como metodo de pago');
+        }
+
+        if (!order.payment) {
+            throw new NotFoundException('Pago no encontrado');
+        }
+
+        if (order.payment.status !== PaymentStatus.PENDING || order.status !== OrderStatus.PENDING) {
+            throw new BadRequestException('El pago ya fue procesado');
+        }
+
+        order.payment.status = dto.status;
+        order.payment.adminNote = dto.adminNote;
+
+        if (dto.status === PaymentStatus.COMPLETED) {
+            order.status = OrderStatus.PAID;
+        }
+
+        if (dto.status === PaymentStatus.REJECTED) {
+            order.status = OrderStatus.REJECTED;
+        }
+
+        await this.paymentRepository.save(order.payment);
+        await this.orderRepository.save(order);
+
+        if (dto.status === PaymentStatus.COMPLETED) {
+            await this.creditSellersFromOrder(order);
+
+            return {
+                orderId: order.id,
+                orderStatus: order.status,
+                paymentStatus: order.payment.status,
+                message: 'Pago confirmado, estamos asignando a un repartidor',
+            };
+        }
+
+        return {
+            orderId: order.id,
+            orderStatus: order.status,
+            paymentStatus: order.payment.status,
+            message: 'Transferencia rechazada',
+        };
     }
 
     private async creditSellersFromOrder(order: Order) {

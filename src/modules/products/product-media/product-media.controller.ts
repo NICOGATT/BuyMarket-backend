@@ -19,14 +19,12 @@ export class ProductMediaController {
 
   @Post('upload')
   @UseInterceptors(
-    FilesInterceptor('files', 10, {
-      dest: './uploads/products',
-    }),
+    FilesInterceptor('files', 10),
   )
   uploadFiles(
     @UploadedFiles() files: Express.Multer.File[],
   ) {
-    return this.productMediaService.uploadFiles(files);
+    return this.productMediaService.uploadMedia(files);
   }
 
   @Get()

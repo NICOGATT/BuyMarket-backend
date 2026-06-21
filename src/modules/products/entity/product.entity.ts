@@ -55,6 +55,9 @@ export class Product {
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;
 
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  horarioDisponible?: string | null;
+
   @ManyToOne(() => User, (user) => user.products, {
     nullable: false,
     onDelete: 'CASCADE',
