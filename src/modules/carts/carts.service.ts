@@ -28,7 +28,7 @@ export class CartsService {
       where: {
         user: { id: userId },
       },
-      relations: ['user', 'items', 'items.product'],
+      relations: ['user', 'items', 'items.product', 'items.product.media'],
     });
 
     if (!cart) {

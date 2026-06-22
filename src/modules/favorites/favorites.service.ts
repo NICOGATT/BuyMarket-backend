@@ -26,7 +26,7 @@ export class FavoritesService {
           id : userId
         }
       }, 
-      relations : ["user", "product"], 
+      relations : ["user", "product", "product.media"], 
       order : {
         createdAt : "DESC",
       }
