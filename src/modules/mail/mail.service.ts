@@ -1,24 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 @Injectable()
 export class MailService {
-  private transporter = nodemailer.createTransport({
-    host: process.env.MAIL_HOST,
-    port: Number(process.env.MAIL_PORT),
-    secure: process.env.MAIL_SECURE === 'true',
-    auth: {
-      user: process.env.MAIL_USER,
-      pass: process.env.MAIL_PASS,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
-  });
+  private resend = new Resend(process.env.RESEND_API_KEY);
 
   async sendVerificationCode(email: string, code: string) {
-    await this.transporter.sendMail({
-      from: process.env.MAIL_FROM,
+    await this.resend.emails.send({
+      from: process.env.MAIL_FROM!,
       to: email,
       subject: 'Código de verificación - BuyMarket',
       html: `
