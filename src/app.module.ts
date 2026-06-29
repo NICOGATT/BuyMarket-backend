@@ -46,6 +46,10 @@ import { MailModule } from './modules/mail/mail.module';
         database: config.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
         synchronize: true,
+        ssl : 
+          config.get<string>('NODE_ENV') === 'production'
+            ? {rejectUnauthorized : false}
+            : false, 
       }),
     }),
 
