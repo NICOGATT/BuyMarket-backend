@@ -3,7 +3,7 @@ import * as nodemailer from 'nodemailer';
 @Injectable()
 export class MailService {
     private transporter = nodemailer.createTransport({
-        host: process.env.MAIL_HOS, 
+        host: process.env.MAIL_HOST, 
         port: Number(process.env.MAIL_PORT), 
         secure : false, 
         auth: {
