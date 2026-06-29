@@ -13,6 +13,7 @@ import { User } from '../../users/entity/user.entity';
 import { OrderItem } from './order-item.entity';
 import { Payment } from '../../payments/entity/payment.entity';
 import { OrderStatus, PaymentMethod } from './order.enums';
+import { Shipment } from '../../shipments/entities/shipment.entity';
 
 export { OrderStatus, PaymentMethod } from './order.enums';
 
@@ -81,6 +82,9 @@ export class Order {
   @OneToOne(() => Payment, (payment) => payment.order)
   payment? : Payment; 
 
+  @OneToOne(() => Shipment, (shipment) => shipment.order)
+  shipment! : Shipment; 
+  
   @CreateDateColumn()
   createdAt!: Date;
 

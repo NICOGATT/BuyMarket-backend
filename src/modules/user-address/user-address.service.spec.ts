@@ -52,6 +52,8 @@ describe('UserAddressesService', () => {
 
   const createAddressDto: CreateUserAddressDto = {
     label: 'Casa',
+    receiverName : 'Nicolas', 
+    phone : '11 3425-9364',
     street: 'Av. Siempre Viva',
     number: '742',
     floor: '2',

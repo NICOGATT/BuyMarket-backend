@@ -11,6 +11,7 @@ import {
   UploadedFiles,
   UseGuards,
   ParseIntPipe,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 
 import { ProductsService } from './products.service';
@@ -37,6 +38,11 @@ export class ProductsController {
   findAll() {
     return this.productsService.findAll();
   }
+
+  @Get('featured')
+  findFeatured() {
+    return this.productsService.findFeatured();
+  }
   
   @UseGuards(JwtAuthGuard)
   @Get('my-products')
@@ -44,7 +50,7 @@ export class ProductsController {
     return this.productsService.findMyProducts(user.id)
   }
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.productsService.findOne(id);
   }
 
@@ -71,4 +77,5 @@ export class ProductsController {
   ) {
     return this.productsService.uploadProductMedia(id, files);
   }
+
 }

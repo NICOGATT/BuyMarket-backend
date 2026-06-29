@@ -27,6 +27,9 @@ export class Plan {
   @Column({ default: true })
   isActive!: boolean;
 
+  @Column({default : false})
+  isFeatured! : boolean; 
+
   @OneToMany(() => User, user => user.plan)
   users!: User[];
 

@@ -1,12 +1,19 @@
 import {
+  ArgumentsHost,
   Body,
+  Catch,
   Controller,
+  ExceptionFilter,
+  HttpStatus,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  UploadedFile,
+  UseFilters,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -15,6 +22,32 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../users/entity/user.entity';
 import { NotifyTransferPaymentDto } from './dto/notify-transfer-payment.dto';
 import { UpdateTransferPaymentStatusDto } from './dto/update-transfer-payment-status.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+
+const transferProofMaxSize = 5 * 1024 * 1024;
+const transferProofMaxSizeMessage = 'El comprobante no puede superar los 5 MB.';
+
+@Catch()
+class TransferProofUploadExceptionFilter implements ExceptionFilter {
+  catch(exception: any, host: ArgumentsHost) {
+    const isFileSizeError =
+      exception?.code === 'LIMIT_FILE_SIZE' ||
+      exception?.message === 'File too large' ||
+      exception?.response?.message === 'File too large';
+
+    if (!isFileSizeError) {
+      throw exception;
+    }
+
+    const response = host.switchToHttp().getResponse();
+
+    response.status(HttpStatus.PAYLOAD_TOO_LARGE).json({
+      statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
+      message: transferProofMaxSizeMessage,
+      error: 'Payload Too Large',
+    });
+  }
+}
 
 @Controller('payments')
 export class PaymentsController {
@@ -62,5 +95,27 @@ export class PaymentsController {
     @Body() dto: UpdateTransferPaymentStatusDto,
   ) {
     return this.paymentsService.updateTransferPaymentStatus(orderId, dto);
+  }
+
+  @Post(':paymentId/proof')
+  @UseGuards(JwtAuthGuard)
+  @UseFilters(TransferProofUploadExceptionFilter)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: transferProofMaxSize,
+      },
+    }),
+  )
+  uploadProof(
+    @Param('paymentId') paymentId : string, 
+    @UploadedFile() file : Express.Multer.File, 
+    @Req() req
+  ) {
+    return this.paymentsService.uploadedTranferProof(
+      paymentId,
+      file, 
+      req.user.id
+    )
   }
 }

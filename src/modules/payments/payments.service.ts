@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MercadoPagoConfig, Payment as MercadoPagoPayment, Preference } from 'mercadopago';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -8,6 +8,8 @@ import { WalletService } from '../wallet/wallet.service';
 import { Payment as PaymentEntity, PaymentStatus } from './entity/payment.entity';
 import { NotifyTransferPaymentDto } from './dto/notify-transfer-payment.dto';
 import { UpdateTransferPaymentStatusDto } from './dto/update-transfer-payment-status.dto';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
+import { ProductMediaType } from '../products/product-media/entities/product-media.entity';
 
 @Injectable()
 export class PaymentsService {
@@ -23,6 +25,8 @@ export class PaymentsService {
         private readonly paymentRepository : Repository<PaymentEntity>,
 
         private readonly walletService: WalletService,
+
+        private readonly cloudinaryService : CloudinaryService
     ) {
         this.client = new MercadoPagoConfig({
             accessToken : this.configService.get<string>('MP_ACCESS_TOKEN')!,
@@ -310,6 +314,43 @@ export class PaymentsService {
                 amount: data.amount,
                 commisionPercentage: data.commissionPercentage,
             });
+        }
+    }
+
+    async uploadedTranferProof (
+        paymentId : string, 
+        file : Express.Multer.File, 
+        userId : string
+    ) {
+        const payment = await this.paymentRepository.findOne({
+            where : {
+                id : paymentId
+            }, 
+            relations : ['order', 'order.buyer']
+        })
+
+        if(!payment) {
+            throw new NotFoundException('Pago no encontrado'); 
+        }
+
+        if(payment.order.buyer.id !== userId) {
+            throw new ForbiddenException('No podes subir comprobante de esta orden');
+        }
+
+        if(payment.status !== PaymentStatus.PENDING) {
+            throw new BadRequestException('Este pago ya no esta pendiente')
+        }
+
+        const uploaded = await this.cloudinaryService.uploadFile(file, 'buymarket/payments/proofs', ProductMediaType.IMAGE);
+        
+        payment.proofImageUrl = uploaded.secure_url; 
+        payment.proofUploadedAt = new Date(); 
+
+        await this.paymentRepository.save(payment); 
+
+        return {
+            message : "Comprobante subido correctamente", 
+            payment,
         }
     }
 }

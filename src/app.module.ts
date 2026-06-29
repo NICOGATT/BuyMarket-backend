@@ -23,7 +23,9 @@ import { WalletTransactionsModule } from './modules/wallet-transaction/wallet-tr
 import { WithdrawalRequestsModule } from './modules/with-drawal-request/with-drawal-request.module';
 import { UserAddressesModule } from './modules/user-address/user-address.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
-import { WalletMovementModule } from './wallet-movement/wallet-movement.module';
+import { WalletMovementModule } from './modules/wallet-movement/wallet-movement.module';
+import { ShipmentsModule } from './modules/shipments/shipments.module'; 
+import { MailModule } from './modules/mail/mail.module'; 
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -66,6 +68,8 @@ import { WalletMovementModule } from './wallet-movement/wallet-movement.module';
     UserAddressesModule,
     CloudinaryModule,
     WalletMovementModule,
+    ShipmentsModule,
+    MailModule,
   ],
 })
 export class AppModule {}

@@ -11,9 +11,11 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { User } from '../users/entity/user.entity';
 import { Wallet } from '../wallet/entity/wallet.entity';
 import { Plan } from '../plan/entities/plan.entity';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
+    MailModule,
     TypeOrmModule.forFeature([User, Plan, Wallet,]),
 
     PassportModule,

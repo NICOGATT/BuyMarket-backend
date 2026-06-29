@@ -9,6 +9,7 @@ import {
 export enum ProductMediaType {
   IMAGE = 'image',
   VIDEO = 'video',
+  DOCUMENT = 'document', 
 }
 
 @Entity('product_media')

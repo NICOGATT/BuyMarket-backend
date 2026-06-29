@@ -33,8 +33,8 @@ export class User {
   @Column({ type: 'varchar', length: 150, unique: true })
   email!: string;
 
-  @Column({ type: 'varchar' })
-  password!: string;
+  @Column({ type: 'varchar', nullable : true })
+  password?: string;
 
   @Column({
     type: 'enum',
@@ -57,7 +57,22 @@ export class User {
 
   @OneToMany(() => UserAddress, address => address.user)
   addresses! : UserAddress[]
-  
+
+  @Column({default : false})
+  isEmailVerified! : boolean; 
+
+  @Column({nullable : true})
+  emailVerificationCode? : string; 
+
+  @Column({type : 'timestamp', nullable : true})
+  emailVerifcationExpires? : Date;
+
+  @Column({nullable : true})
+  googleId?: string; 
+
+  @Column({default : 'local'})
+  provider! : 'local' | 'google'; 
+
   @CreateDateColumn()
   createdAt!: Date;
 

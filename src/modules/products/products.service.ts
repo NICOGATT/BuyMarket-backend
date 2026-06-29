@@ -268,4 +268,27 @@ export class ProductsService {
 
     return this.removeSellerPassword(products);
   }
+
+  async findFeatured() {
+    return this.productsRepository.find({
+      where : {
+        isActive : true,
+        seller : {
+          plan : {
+            isFeatured : true
+          }
+        }
+      }, 
+      relations : {
+        seller : {
+          plan : true
+        }, 
+        category : true, 
+        media : true,
+      }, 
+      order : {
+        createdAt : 'DESC'
+      }
+    })
+  }
 }

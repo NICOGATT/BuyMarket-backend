@@ -48,6 +48,12 @@ export class UserAddress {
   })
   user!: User;
 
+  @Column({nullable : true})
+  receiverName? : string;
+
+  @Column()
+  phone! : string; 
+
   @CreateDateColumn()
   createdAt!: Date;
 

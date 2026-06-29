@@ -46,6 +46,9 @@ export class Payment {
   @JoinColumn()
   order!: Order;
 
+  @Column({nullable : true})
+  proofUploadedAt? : Date; 
+
   @CreateDateColumn()
   createdAt: Date | undefined;
 

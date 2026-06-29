@@ -5,24 +5,24 @@ import { ProductMediaType } from '../modules/products/product-media/entities/pro
 
 @Injectable()
 export class CloudinaryService {
-uploadFile(
-  file: Express.Multer.File,
-  folder = 'buymarket/products',
-  type: ProductMediaType,
-): Promise<UploadApiResponse> {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        folder,
-        resource_type: type === ProductMediaType.VIDEO ? 'video' : 'image',
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result as UploadApiResponse);
-      },
-    );
+  uploadFile(
+    file: Express.Multer.File,
+    folder = 'buymarket/products',
+    type: ProductMediaType,
+  ): Promise<UploadApiResponse> {
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          resource_type: type === ProductMediaType.VIDEO ? 'video' : 'image',
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          resolve(result as UploadApiResponse);
+        },
+      );
 
-    streamifier.createReadStream(file.buffer).pipe(uploadStream);
-  });
-}
+      streamifier.createReadStream(file.buffer).pipe(uploadStream);
+    });
+  }
 }

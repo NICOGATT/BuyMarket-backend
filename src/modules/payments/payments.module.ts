@@ -5,9 +5,11 @@ import { PaymentsController } from './payments.controller';
 import { Order } from '../orders/entities/order.entity';
 import { WalletsModule } from '../wallet/wallet.module';
 import { Payment } from './entity/payment.entity';
+import { CloudinaryModule } from '../../cloudinary/cloudinary.module';
+
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Order, Payment]), WalletsModule],
+  imports: [TypeOrmModule.forFeature([Order, Payment]), WalletsModule, CloudinaryModule],
   controllers: [PaymentsController],
   providers: [PaymentsService],
 })

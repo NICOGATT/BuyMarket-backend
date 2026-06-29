@@ -1,6 +1,6 @@
 import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
-import { Wallet } from "../../modules/wallet/entity/wallet.entity";
-import { Order } from "../../modules/orders/entities/order.entity";
+import { Wallet } from "../../wallet/entity/wallet.entity";
+import { Order } from "../../orders/entities/order.entity";
 
 @Entity('wallet_movements')
 export class WalletMovement {

@@ -13,6 +13,12 @@ export class CreateUserAddressDto {
 
   @IsString()
   number!: string;
+  @IsOptional()
+  @IsString()
+  receiverName?: string;
+
+  @IsString()
+  phone!: string;
 
   @IsString()
   @IsOptional()
