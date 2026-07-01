@@ -18,8 +18,8 @@ export class MailService {
       `,
     });
     if (error) {
-      console.error('ERROR RESEND:', error);
-      throw new Error('No se pudo enviar el email');
+      console.error('ERROR RESEND: ', JSON.stringify(error, null, 2));
+      throw new Error(error.message || 'No se pudo enviar el email');
     }
 
     console.log('MAIL ENVIADO:', data);
