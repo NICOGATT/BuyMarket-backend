@@ -13,7 +13,7 @@ import { User } from '../../users/entity/user.entity';
 import { OrderItem } from './order-item.entity';
 import { Payment } from '../../payments/entity/payment.entity';
 import { OrderStatus, PaymentMethod } from './order.enums';
-import { Shipment } from '../../shipments/entities/shipment.entity';
+import { Shipment, ShippingType } from '../../shipments/entities/shipment.entity';
 
 export { OrderStatus, PaymentMethod } from './order.enums';
 
@@ -50,6 +50,46 @@ export class Order {
 
   @Column({ type: 'varchar', length: 255 })
   deliveryAddress!: string;
+
+  @Column({
+    type: 'enum',
+    enum: ShippingType,
+    default: ShippingType.LOCAL_DELIVERY,
+  })
+  shippingType!: ShippingType;
+
+  @Column({ nullable: true })
+  nationalShippingFullName?: string;
+
+  @Column({ nullable: true })
+  nationalShippingDni?: string;
+
+  @Column({ nullable: true })
+  nationalShippingCuit?: string;
+
+  @Column({ nullable: true })
+  nationalShippingAddress?: string;
+
+  @Column({ nullable: true })
+  nationalShippingPostalCode?: string;
+
+  @Column({ nullable: true })
+  nationalShippingCity?: string;
+
+  @Column({ nullable: true })
+  nationalShippingProvince?: string;
+
+  @Column({ nullable: true, default: 'Argentina' })
+  nationalShippingCountry?: string;
+
+  @Column({ nullable: true })
+  nationalShippingPhone?: string;
+
+  @Column({ nullable: true })
+  nationalShippingEmail?: string;
+
+  @Column({ nullable: true })
+  nationalShippingTransportName?: string;
 
   @Column({
     type : 'enum', 

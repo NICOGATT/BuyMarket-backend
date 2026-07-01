@@ -50,16 +50,52 @@ export class ShipmentsService {
       throw new BadRequestException('Esta orden ya tiene un envío creado');
     }
 
+    const isNationalShipping = dto.type === ShippingType.NATIONAL_SHIPPING;
+
     const shipment = this.shipmentRepository.create({
       order,
       type: dto.type,
       carrier: dto.carrier,
       cost: dto.cost ?? 0,
       pickupAddress: dto.pickupAddress,
-      deliveryAddress: dto.deliveryAddress,
-      buyerProvince: dto.buyerProvince,
-      buyerCity: dto.buyerCity,
-      buyerPostalCode: dto.buyerPostalCode,
+      deliveryAddress:
+        dto.deliveryAddress ??
+        (isNationalShipping
+          ? order.nationalShippingAddress
+          : undefined) ??
+        order.deliveryAddress,
+      buyerFullName:
+        dto.buyerFullName ??
+        (isNationalShipping ? order.nationalShippingFullName : undefined),
+      buyerDni:
+        dto.buyerDni ??
+        (isNationalShipping ? order.nationalShippingDni : undefined),
+      buyerCuit:
+        dto.buyerCuit ??
+        (isNationalShipping ? order.nationalShippingCuit : undefined),
+      buyerProvince:
+        dto.buyerProvince ??
+        (isNationalShipping ? order.nationalShippingProvince : undefined),
+      buyerCity:
+        dto.buyerCity ??
+        (isNationalShipping ? order.nationalShippingCity : undefined),
+      buyerPostalCode:
+        dto.buyerPostalCode ??
+        (isNationalShipping ? order.nationalShippingPostalCode : undefined),
+      buyerCountry:
+        dto.buyerCountry ??
+        (isNationalShipping ? order.nationalShippingCountry : undefined),
+      buyerPhone:
+        dto.buyerPhone ??
+        (isNationalShipping ? order.nationalShippingPhone : undefined),
+      buyerEmail:
+        dto.buyerEmail ??
+        (isNationalShipping ? order.nationalShippingEmail : undefined),
+      transportName:
+        dto.transportName ??
+        (isNationalShipping
+          ? order.nationalShippingTransportName
+          : undefined),
       status:
         dto.type === ShippingType.LOCAL_DELIVERY
           ? ShipmentStatus.ASSIGNING_DRIVER

@@ -6,7 +6,7 @@ export class MailService {
   private resend = new Resend(process.env.RESEND_API_KEY);
 
   async sendVerificationCode(email: string, code: string) {
-    await this.resend.emails.send({
+    const {data, error} = await this.resend.emails.send({
       from: process.env.MAIL_FROM!,
       to: email,
       subject: 'Código de verificación - BuyMarket',
@@ -17,5 +17,12 @@ export class MailService {
         <p>Este código vence en 10 minutos.</p>
       `,
     });
+    if (error) {
+      console.error('ERROR RESEND:', error);
+      throw new Error('No se pudo enviar el email');
+    }
+
+    console.log('MAIL ENVIADO:', data);
+    return data;
   }
 }

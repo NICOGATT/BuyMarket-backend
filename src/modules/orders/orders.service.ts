@@ -13,8 +13,12 @@ import { Cart } from '../carts/entities/cart.entity';
 import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Product } from '../products/entity/product.entity';
 import { User } from '../users/entity/user.entity';
-import { CheckoutOrderDto } from './dto/checkout-order.dto';
+import {
+  CheckoutOrderDto,
+  NationalShippingDataDto,
+} from './dto/checkout-order.dto';
 import { Payment, PaymentStatus } from '../payments/entity/payment.entity';
+import { ShippingType } from '../shipments/entities/shipment.entity';
 
 @Injectable()
 export class OrdersService {
@@ -73,12 +77,31 @@ export class OrdersService {
       total += Number(item.unitPrice) * item.quantity; 
     }
 
+    const shippingType = checkoutDto.shippingType ?? ShippingType.LOCAL_DELIVERY;
+    const nationalShippingData =
+      shippingType === ShippingType.NATIONAL_SHIPPING
+        ? this.normalizeNationalShippingData(checkoutDto.nationalShippingData)
+        : undefined;
+
     const order = this.ordersRepository.create({
       buyer : user, 
       total, 
       status : OrderStatus.PENDING,
-      deliveryAddress : checkoutDto.deliveryAddress, 
-      paymentMethod : checkoutDto.paymentMethod
+      deliveryAddress : nationalShippingData?.address ?? checkoutDto.deliveryAddress!,
+      shippingType,
+      paymentMethod : checkoutDto.paymentMethod,
+      notes: checkoutDto.notes,
+      nationalShippingFullName: nationalShippingData?.fullName,
+      nationalShippingDni: nationalShippingData?.dni,
+      nationalShippingCuit: nationalShippingData?.cuit,
+      nationalShippingAddress: nationalShippingData?.address,
+      nationalShippingPostalCode: nationalShippingData?.postalCode,
+      nationalShippingCity: nationalShippingData?.city,
+      nationalShippingProvince: nationalShippingData?.province,
+      nationalShippingCountry: nationalShippingData?.country,
+      nationalShippingPhone: nationalShippingData?.phone,
+      nationalShippingEmail: nationalShippingData?.email,
+      nationalShippingTransportName: nationalShippingData?.transportName,
     })
 
     const savedOrder = await this.ordersRepository.save(order); 
@@ -136,7 +159,7 @@ export class OrdersService {
       where : {
         buyer : {id : userId}
       }, 
-      relations : ['buyer', 'items', 'items.product', 'payment'], 
+      relations : ['buyer', 'items', 'items.product', 'payment', 'shipment'],
       order : {
         createdAt : 'DESC'
       }
@@ -149,7 +172,7 @@ export class OrdersService {
         id,
         buyer: { id: userId },
       },
-      relations: ['buyer', 'items', 'items.product', 'payment'],
+      relations: ['buyer', 'items', 'items.product', 'payment', 'shipment'],
     });
 
     if (!order) {
@@ -160,17 +183,65 @@ export class OrdersService {
   }
 
   async findAllOrders() {
-  return this.ordersRepository.find({
-    relations: [
-      'buyer',
-      'items',
-      'items.product',
-      'items.product.seller',
-      'payment',
-    ],
-    order: {
-      createdAt: 'DESC',
-    },
-  });
-}
+    return this.ordersRepository.find({
+      relations: [
+        'buyer',
+        'items',
+        'items.product',
+        'items.product.seller',
+        'payment',
+        'shipment',
+      ],
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+  }
+
+  private normalizeNationalShippingData(data?: NationalShippingDataDto) {
+    if (!data) {
+      throw new BadRequestException(
+        'Los datos de envio nacional son obligatorios',
+      );
+    }
+
+    const requiredFields: Array<keyof NationalShippingDataDto> = [
+      'fullName',
+      'dni',
+      'cuit',
+      'address',
+      'postalCode',
+      'city',
+      'province',
+      'phone',
+      'email',
+      'transportName',
+    ];
+
+    const missingField = requiredFields.find((field) => {
+      const value = data[field];
+
+      return typeof value !== 'string' || value.trim().length === 0;
+    });
+
+    if (missingField) {
+      throw new BadRequestException(
+        'Los datos de envio nacional estan incompletos',
+      );
+    }
+
+    return {
+      fullName: data.fullName.trim(),
+      dni: data.dni.trim(),
+      cuit: data.cuit.trim(),
+      address: data.address.trim(),
+      postalCode: data.postalCode.trim(),
+      city: data.city.trim(),
+      province: data.province.trim(),
+      country: data.country?.trim() || 'Argentina',
+      phone: data.phone.trim(),
+      email: data.email.trim(),
+      transportName: data.transportName.trim(),
+    };
+  }
 }

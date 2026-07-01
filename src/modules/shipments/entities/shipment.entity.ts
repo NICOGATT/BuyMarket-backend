@@ -68,6 +68,15 @@ export class Shipment {
   deliveryAddress?: string;
 
   @Column({ nullable: true })
+  buyerFullName?: string;
+
+  @Column({ nullable: true })
+  buyerDni?: string;
+
+  @Column({ nullable: true })
+  buyerCuit?: string;
+
+  @Column({ nullable: true })
   buyerProvince?: string;
 
   @Column({ nullable: true })
@@ -75,6 +84,18 @@ export class Shipment {
 
   @Column({ nullable: true })
   buyerPostalCode?: string;
+
+  @Column({ nullable: true, default: 'Argentina' })
+  buyerCountry?: string;
+
+  @Column({ nullable: true })
+  buyerPhone?: string;
+
+  @Column({ nullable: true })
+  buyerEmail?: string;
+
+  @Column({ nullable: true })
+  transportName?: string;
 
   @ManyToOne(() => User, { nullable: true })
   driver?: User;

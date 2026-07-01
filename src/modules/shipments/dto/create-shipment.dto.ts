@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsEmail,
   IsNumber,
   IsOptional,
   IsString,
@@ -33,6 +34,18 @@ export class CreateShipmentDto {
 
   @IsOptional()
   @IsString()
+  buyerFullName?: string;
+
+  @IsOptional()
+  @IsString()
+  buyerDni?: string;
+
+  @IsOptional()
+  @IsString()
+  buyerCuit?: string;
+
+  @IsOptional()
+  @IsString()
   buyerProvince?: string;
 
   @IsOptional()
@@ -42,4 +55,20 @@ export class CreateShipmentDto {
   @IsOptional()
   @IsString()
   buyerPostalCode?: string;
+
+  @IsOptional()
+  @IsString()
+  buyerCountry?: string;
+
+  @IsOptional()
+  @IsString()
+  buyerPhone?: string;
+
+  @IsOptional()
+  @IsEmail()
+  buyerEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  transportName?: string;
 }
