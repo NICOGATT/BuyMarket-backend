@@ -6,10 +6,7 @@ import { Reflector } from '@nestjs/core';
 
 const defaultCorsOrigins = [
   'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://192.168.0.213:5173',
-  'https://hdphxs14-5173.brs.devtunnels.ms',
-  "https://hdphxs14-5174.brs.devtunnels.ms"
+  "https://buy-market-web.vercel.app/"
 ];
 
 function getCorsOrigins() {
