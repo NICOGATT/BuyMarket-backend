@@ -22,6 +22,9 @@ import { extname } from 'path';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorators';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { UserRole } from '../users/entity/user.entity';
 
 @Controller('products')
 export class ProductsController {
@@ -43,6 +46,27 @@ export class ProductsController {
   findFeatured() {
     return this.productsService.findFeatured();
   }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Get('admin')
+  findAllForAdmin() {
+    return this.productsService.findAllForAdmin();
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/approve')
+  approve(@Param('id', ParseUUIDPipe) id: string) {
+    return this.productsService.approve(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/reject')
+  reject(@Param('id', ParseUUIDPipe) id: string) {
+    return this.productsService.reject(id);
+  }
   
   @UseGuards(JwtAuthGuard)
   @Get('my-products')
@@ -51,7 +75,7 @@ export class ProductsController {
   }
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.productsService.findOne(id);
+    return this.productsService.findOnePublic(id);
   }
 
   @Patch(':id')

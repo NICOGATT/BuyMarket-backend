@@ -16,6 +16,12 @@ import { SubCategory } from '../../subcategoria/entities/subcategoria.entity';
 import { ProductAttributeValue } from './product-attributes-value.entity';
 import { UserAddress } from '../../user-address/entities/user-address.entity';
 
+export enum ProductApprovalStatus {
+  PENDING = 'pending',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+}
+
 @Entity('products')
 export class Product {
   @PrimaryGeneratedColumn('uuid')
@@ -54,6 +60,13 @@ export class Product {
 
   @Column({ type: 'boolean', default: true })
   isActive!: boolean;
+
+  @Column({
+    type: 'enum',
+    enum: ProductApprovalStatus,
+    default: ProductApprovalStatus.APPROVED,
+  })
+  approvalStatus!: ProductApprovalStatus;
 
   @Column({ type: 'varchar', length: 120, nullable: true })
   horarioDisponible?: string | null;

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 
 import { CategorySuggestionsService } from './category-suggestions.service';
+import { CreateCategorySuggestionDto } from './dto/create-category-suggestion.dto';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorators';
@@ -26,7 +27,7 @@ export class CategorySuggestionsController {
   @UseGuards(JwtAuthGuard)
   @Post()
   create(
-    @Body() createDto: any,
+    @Body() createDto: CreateCategorySuggestionDto,
     @CurrentUser() user: any,
   ) {
     return this.categorySuggestionsService.create(
@@ -49,6 +50,8 @@ export class CategorySuggestionsController {
     return this.categorySuggestionsService.approve(id);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Patch(':id/reject')
   reject(@Param('id') id: string) {
     return this.categorySuggestionsService.reject(id);

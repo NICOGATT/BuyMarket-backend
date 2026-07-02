@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import { Product } from './entity/product.entity';
+import { Product, ProductApprovalStatus } from './entity/product.entity';
 
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -80,6 +80,8 @@ export class ProductsService {
       description: createProductDto.description,
       price: createProductDto.price,
       stock: createProductDto.stock,
+      isActive: false,
+      approvalStatus: ProductApprovalStatus.PENDING,
       category: subCategory.category,
       subCategory,
       seller: {
@@ -150,6 +152,30 @@ export class ProductsService {
 
   async findAll() {
     const products = await this.productsRepository.find({
+      where: {
+        isActive: true,
+        approvalStatus: ProductApprovalStatus.APPROVED,
+      },
+      relations: {
+        category: true,
+        subCategory: true,
+        seller: true,
+        pickupAddress: true,
+        media: true,
+        attributeValues: {
+          attribute: true,
+        },
+      },
+      order: {
+        createdAt: 'DESC',
+      },
+    });
+
+    return this.removeSellerPassword(products);
+  }
+
+  async findAllForAdmin() {
+    const products = await this.productsRepository.find({
       relations: {
         category: true,
         subCategory: true,
@@ -171,6 +197,32 @@ export class ProductsService {
   async findOne(id: string) {
     const product = await this.productsRepository.findOne({
       where: { id },
+      relations: {
+        category: true,
+        subCategory: true,
+        seller: true,
+        pickupAddress: true,
+        media: true,
+        attributeValues: {
+          attribute: true,
+        },
+      },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+
+    return this.removeSellerPassword(product);
+  }
+
+  async findOnePublic(id: string) {
+    const product = await this.productsRepository.findOne({
+      where: {
+        id,
+        isActive: true,
+        approvalStatus: ProductApprovalStatus.APPROVED,
+      },
       relations: {
         category: true,
         subCategory: true,
@@ -213,6 +265,40 @@ export class ProductsService {
     }
 
     return await this.productsRepository.remove(product);
+  }
+
+  async approve(id: string) {
+    const product = await this.productsRepository.findOne({
+      where: { id },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+
+    product.approvalStatus = ProductApprovalStatus.APPROVED;
+    product.isActive = true;
+
+    await this.productsRepository.save(product);
+
+    return this.findOne(id);
+  }
+
+  async reject(id: string) {
+    const product = await this.productsRepository.findOne({
+      where: { id },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+
+    product.approvalStatus = ProductApprovalStatus.REJECTED;
+    product.isActive = false;
+
+    await this.productsRepository.save(product);
+
+    return this.findOne(id);
   }
 
   async uploadProductMedia(
@@ -273,6 +359,7 @@ export class ProductsService {
     return this.productsRepository.find({
       where : {
         isActive : true,
+        approvalStatus: ProductApprovalStatus.APPROVED,
         seller : {
           plan : {
             isFeatured : true

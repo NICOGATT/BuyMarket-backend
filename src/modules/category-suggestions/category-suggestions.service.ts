@@ -6,8 +6,12 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { CategorySuggestion } from './entities/category-suggestion.entity';
+import {
+  CategorySuggestion,
+  CategorySuggestionStatus,
+} from './entities/category-suggestion.entity';
 import { Category } from '../categories/entities/category.entity';
+import { CreateCategorySuggestionDto } from './dto/create-category-suggestion.dto';
 
 @Injectable()
 export class CategorySuggestionsService {
@@ -19,11 +23,12 @@ export class CategorySuggestionsService {
     private readonly categoriesRepository: Repository<Category>,
   ) {}
 
-  async create(createDto: any, user: any) {
+  async create(createDto: CreateCategorySuggestionDto, user: any) {
     const suggestion = this.suggestionsRepository.create({
-      ...createDto,
+      name: createDto.name.trim(),
+      description: createDto.description?.trim() || undefined,
       user,
-      status: 'pending',
+      status: CategorySuggestionStatus.PENDING,
     });
 
     return this.suggestionsRepository.save(suggestion);
@@ -60,7 +65,7 @@ export class CategorySuggestionsService {
 
     await this.categoriesRepository.save(category);
 
-    suggestion.status = 'approved' as any;
+    suggestion.status = CategorySuggestionStatus.APPROVED;
 
     await this.suggestionsRepository.save(suggestion);
 
@@ -82,7 +87,7 @@ export class CategorySuggestionsService {
       );
     }
 
-    suggestion.status = 'rejected' as any;
+    suggestion.status = CategorySuggestionStatus.REJECTED;
 
     await this.suggestionsRepository.save(suggestion);
 
