@@ -12,6 +12,7 @@ import { Product } from '../../products/entity/product.entity';
 import { Wallet } from '../../wallet/entity/wallet.entity';
 import { Plan } from '../../plan/entities/plan.entity';
 import { UserAddress } from '../../user-address/entities/user-address.entity';
+import { UserPaymentMethod } from '../../user-payment-methods/entities/user-payment-method.entity';
 
 export enum UserRole {
   USER = 'user',
@@ -57,6 +58,9 @@ export class User {
 
   @OneToMany(() => UserAddress, address => address.user)
   addresses! : UserAddress[]
+
+  @OneToMany(() => UserPaymentMethod, paymentMethod => paymentMethod.user)
+  paymentMethods!: UserPaymentMethod[];
 
   @Column({default : false})
   isEmailVerified! : boolean; 

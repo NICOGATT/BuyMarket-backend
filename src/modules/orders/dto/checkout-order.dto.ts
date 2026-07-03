@@ -74,8 +74,13 @@ export class CheckoutOrderDto {
   @Type(() => NationalShippingDataDto)
   nationalShippingData?: NationalShippingDataDto;
 
+  @ValidateIf((dto) => !dto.paymentMethodId)
   @IsEnum(PaymentMethod)
-  paymentMethod!: PaymentMethod;
+  paymentMethod?: PaymentMethod;
+
+  @IsOptional()
+  @IsString()
+  paymentMethodId?: string;
 
   @IsOptional()
   @IsString()

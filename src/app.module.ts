@@ -26,6 +26,7 @@ import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { WalletMovementModule } from './modules/wallet-movement/wallet-movement.module';
 import { ShipmentsModule } from './modules/shipments/shipments.module'; 
 import { MailModule } from './modules/mail/mail.module'; 
+import { UserPaymentMethodsModule } from './modules/user-payment-methods/user-payment-methods.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -74,6 +75,7 @@ import { MailModule } from './modules/mail/mail.module';
     WalletMovementModule,
     ShipmentsModule,
     MailModule,
+    UserPaymentMethodsModule,
   ],
 })
 export class AppModule {}

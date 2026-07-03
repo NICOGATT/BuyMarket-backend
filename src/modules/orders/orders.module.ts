@@ -11,6 +11,7 @@ import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Product } from '../products/entity/product.entity';
 import { User } from '../users/entity/user.entity';
 import { Payment } from '../payments/entity/payment.entity';
+import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { Payment } from '../payments/entity/payment.entity';
       Product,
       User,
       Payment,
+      UserPaymentMethod,
     ]),
   ],
   controllers: [OrdersController],

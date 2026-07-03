@@ -19,6 +19,7 @@ import {
 } from './dto/checkout-order.dto';
 import { Payment, PaymentStatus } from '../payments/entity/payment.entity';
 import { ShippingType } from '../shipments/entities/shipment.entity';
+import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
 
 @Injectable()
 export class OrdersService {
@@ -43,6 +44,9 @@ export class OrdersService {
 
     @InjectRepository(Payment)
     private readonly paymentRepository : Repository<Payment>,
+
+    @InjectRepository(UserPaymentMethod)
+    private readonly userPaymentMethodsRepository : Repository<UserPaymentMethod>,
 
     private readonly configService: ConfigService,
   ){}
@@ -77,6 +81,11 @@ export class OrdersService {
       total += Number(item.unitPrice) * item.quantity; 
     }
 
+    const selectedPaymentMethod = await this.resolvePaymentMethod(
+      userId,
+      checkoutDto,
+    );
+
     const shippingType = checkoutDto.shippingType ?? ShippingType.LOCAL_DELIVERY;
     const nationalShippingData =
       shippingType === ShippingType.NATIONAL_SHIPPING
@@ -89,7 +98,7 @@ export class OrdersService {
       status : OrderStatus.PENDING,
       deliveryAddress : nationalShippingData?.address ?? checkoutDto.deliveryAddress!,
       shippingType,
-      paymentMethod : checkoutDto.paymentMethod,
+      paymentMethod : selectedPaymentMethod.method,
       notes: checkoutDto.notes,
       nationalShippingFullName: nationalShippingData?.fullName,
       nationalShippingDni: nationalShippingData?.dni,
@@ -128,12 +137,14 @@ export class OrdersService {
       cart : {id : cart.id},
     });
 
-    if (checkoutDto.paymentMethod === PaymentMethod.TRANSFER) {
+    if (selectedPaymentMethod.method === PaymentMethod.TRANSFER) {
       await this.paymentRepository.save(
         this.paymentRepository.create({
           method: PaymentMethod.TRANSFER,
           status: PaymentStatus.PENDING,
           amount: total,
+          senderAlias: selectedPaymentMethod.senderAlias,
+          senderCbu: selectedPaymentMethod.senderCbu,
           order: savedOrder,
         }),
       );
@@ -242,6 +253,47 @@ export class OrdersService {
       phone: data.phone.trim(),
       email: data.email.trim(),
       transportName: data.transportName.trim(),
+    };
+  }
+
+  private async resolvePaymentMethod(
+    userId: string,
+    checkoutDto: CheckoutOrderDto,
+  ): Promise<{
+    method: PaymentMethod;
+    senderAlias?: string;
+    senderCbu?: string;
+  }> {
+    if (!checkoutDto.paymentMethodId) {
+      if (!checkoutDto.paymentMethod) {
+        throw new BadRequestException('El medio de pago es obligatorio');
+      }
+
+      return {
+        method: checkoutDto.paymentMethod,
+      };
+    }
+
+    const savedPaymentMethod = await this.userPaymentMethodsRepository.findOne({
+      where: {
+        id: checkoutDto.paymentMethodId,
+        user: { id: userId },
+      },
+      relations: ['user'],
+    });
+
+    if (!savedPaymentMethod) {
+      throw new NotFoundException('Medio de pago no encontrado');
+    }
+
+    if (!savedPaymentMethod.isActive) {
+      throw new BadRequestException('El medio de pago no esta activo');
+    }
+
+    return {
+      method: savedPaymentMethod.method,
+      senderAlias: savedPaymentMethod.senderAlias,
+      senderCbu: savedPaymentMethod.senderCbu,
     };
   }
 }

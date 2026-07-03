@@ -8,6 +8,7 @@ import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Payment, PaymentStatus } from '../payments/entity/payment.entity';
 import { Product } from '../products/entity/product.entity';
 import { ShippingType } from '../shipments/entities/shipment.entity';
+import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
 import { User } from '../users/entity/user.entity';
 import { Order, OrderStatus, PaymentMethod } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -32,6 +33,7 @@ describe('OrdersService', () => {
   let productsRepository: MockRepository<Product>;
   let usersRepository: MockRepository<User>;
   let paymentsRepository: MockRepository<Payment>;
+  let userPaymentMethodsRepository: MockRepository<UserPaymentMethod>;
 
   beforeEach(async () => {
     ordersRepository = createMockRepository<Order>();
@@ -41,6 +43,7 @@ describe('OrdersService', () => {
     productsRepository = createMockRepository<Product>();
     usersRepository = createMockRepository<User>();
     paymentsRepository = createMockRepository<Payment>();
+    userPaymentMethodsRepository = createMockRepository<UserPaymentMethod>();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -72,6 +75,10 @@ describe('OrdersService', () => {
         {
           provide: getRepositoryToken(Payment),
           useValue: paymentsRepository,
+        },
+        {
+          provide: getRepositoryToken(UserPaymentMethod),
+          useValue: userPaymentMethodsRepository,
         },
         {
           provide: ConfigService,
@@ -239,6 +246,167 @@ describe('OrdersService', () => {
         nationalShippingTransportName: nationalShippingData.transportName,
       }),
     );
+  });
+
+  it('crea una orden con un medio de pago guardado de transferencia', async () => {
+    const user = { id: 'buyer-1' } as User;
+    const product = {
+      id: 'product-1',
+      title: 'Teclado',
+      stock: 5,
+    } as Product;
+    const cart = {
+      id: 'cart-1',
+      items: [
+        {
+          product,
+          quantity: 1,
+          unitPrice: 2500,
+        },
+      ],
+    } as Cart;
+    const savedPaymentMethod = {
+      id: 'payment-method-1',
+      method: PaymentMethod.TRANSFER,
+      label: 'Transferencia Banco',
+      senderAlias: 'comprador.alias',
+      senderCbu: '1234567890123456789012',
+      isActive: true,
+      user,
+    } as UserPaymentMethod;
+    const savedOrder = {
+      id: 'order-1',
+      buyer: user,
+      total: 2500,
+      status: OrderStatus.PENDING,
+      deliveryAddress: 'Calle 123',
+      paymentMethod: PaymentMethod.TRANSFER,
+    } as Order;
+
+    usersRepository.findOne?.mockResolvedValue(user);
+    cartsRepository.findOne?.mockResolvedValue(cart);
+    userPaymentMethodsRepository.findOne?.mockResolvedValue(savedPaymentMethod);
+    ordersRepository.save?.mockResolvedValue(savedOrder);
+    ordersRepository.findOne?.mockResolvedValue(savedOrder);
+    orderItemsRepository.save?.mockResolvedValue([]);
+    productsRepository.save?.mockResolvedValue(product);
+    cartItemsRepository.delete?.mockResolvedValue({ affected: 1 });
+    paymentsRepository.save?.mockImplementation((payment) =>
+      Promise.resolve(payment),
+    );
+
+    await service.checkout(user.id, {
+      deliveryAddress: 'Calle 123',
+      paymentMethodId: savedPaymentMethod.id,
+    });
+
+    expect(ordersRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentMethod: PaymentMethod.TRANSFER,
+      }),
+    );
+    expect(paymentsRepository.create).toHaveBeenCalledWith({
+      method: PaymentMethod.TRANSFER,
+      status: PaymentStatus.PENDING,
+      amount: 2500,
+      senderAlias: savedPaymentMethod.senderAlias,
+      senderCbu: savedPaymentMethod.senderCbu,
+      order: savedOrder,
+    });
+  });
+
+  it('rechaza checkout con medio de pago guardado inactivo', async () => {
+    const user = { id: 'buyer-1' } as User;
+    const product = {
+      id: 'product-1',
+      title: 'Teclado',
+      stock: 5,
+    } as Product;
+    const cart = {
+      id: 'cart-1',
+      items: [
+        {
+          product,
+          quantity: 1,
+          unitPrice: 2500,
+        },
+      ],
+    } as Cart;
+    const savedPaymentMethod = {
+      id: 'payment-method-1',
+      method: PaymentMethod.TRANSFER,
+      label: 'Transferencia Banco',
+      isActive: false,
+      user,
+    } as UserPaymentMethod;
+
+    usersRepository.findOne?.mockResolvedValue(user);
+    cartsRepository.findOne?.mockResolvedValue(cart);
+    userPaymentMethodsRepository.findOne?.mockResolvedValue(savedPaymentMethod);
+
+    await expect(
+      service.checkout(user.id, {
+        deliveryAddress: 'Calle 123',
+        paymentMethodId: savedPaymentMethod.id,
+      }),
+    ).rejects.toThrow('El medio de pago no esta activo');
+
+    expect(ordersRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('crea una orden de Mercado Pago con un medio guardado', async () => {
+    const user = { id: 'buyer-1' } as User;
+    const product = {
+      id: 'product-1',
+      title: 'Mouse',
+      stock: 2,
+    } as Product;
+    const cart = {
+      id: 'cart-1',
+      items: [
+        {
+          product,
+          quantity: 1,
+          unitPrice: 1000,
+        },
+      ],
+    } as Cart;
+    const savedPaymentMethod = {
+      id: 'payment-method-1',
+      method: PaymentMethod.MERCADO_PAGO,
+      label: 'Mercado Pago',
+      isActive: true,
+      user,
+    } as UserPaymentMethod;
+    const savedOrder = {
+      id: 'order-1',
+      buyer: user,
+      total: 1000,
+      status: OrderStatus.PENDING,
+      deliveryAddress: 'Calle 123',
+      paymentMethod: PaymentMethod.MERCADO_PAGO,
+    } as Order;
+
+    usersRepository.findOne?.mockResolvedValue(user);
+    cartsRepository.findOne?.mockResolvedValue(cart);
+    userPaymentMethodsRepository.findOne?.mockResolvedValue(savedPaymentMethod);
+    ordersRepository.save?.mockResolvedValue(savedOrder);
+    ordersRepository.findOne?.mockResolvedValue(savedOrder);
+    orderItemsRepository.save?.mockResolvedValue([]);
+    productsRepository.save?.mockResolvedValue(product);
+    cartItemsRepository.delete?.mockResolvedValue({ affected: 1 });
+
+    await service.checkout(user.id, {
+      deliveryAddress: 'Calle 123',
+      paymentMethodId: savedPaymentMethod.id,
+    });
+
+    expect(ordersRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentMethod: PaymentMethod.MERCADO_PAGO,
+      }),
+    );
+    expect(paymentsRepository.create).not.toHaveBeenCalled();
   });
 
   it('rechaza checkout nacional sin datos nacionales', async () => {
