@@ -4,14 +4,21 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ObjectLiteral, Repository } from 'typeorm';
 
 import { Category } from '../categories/entities/category.entity';
+import {
+  AttributeType,
+  AttributeUsage,
+} from '../subcategoria/subcategoria-attributes/entities/subcategoria-attribute.entity';
 import { SubCategory } from '../subcategoria/entities/subcategoria.entity';
 import { UserRole } from '../users/entity/user.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
-import { Product } from './entity/product.entity';
+import { ProductVariant } from './entity/product-variant.entity';
+import { Product, ProductApprovalStatus } from './entity/product.entity';
 import { ProductMedia } from './product-media/entities/product-media.entity';
 import { ProductsService } from './products.service';
+import { UserAddress } from '../user-address/entities/user-address.entity';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 
 type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
@@ -25,6 +32,7 @@ const createMockRepository = <T extends ObjectLiteral = ObjectLiteral>(): MockRe
   remove: jest.fn(),
   save: jest.fn(),
   update: jest.fn(),
+  delete: jest.fn(),
 });
 
 describe('ProductsService', () => {
@@ -33,7 +41,9 @@ describe('ProductsService', () => {
   let categoryRepository: MockRepository<Category>;
   let productMediaRepository: MockRepository<ProductMedia>;
   let productAttributeValueRepository: MockRepository<ProductAttributeValue>;
+  let productVariantRepository: MockRepository<ProductVariant>;
   let subCategoryRepository: MockRepository<SubCategory>;
+  let userAddressRepository: MockRepository<UserAddress>;
 
   const category = {
     id: '8ce13fc5-7868-499e-bc30-9d62a63c8b13',
@@ -102,7 +112,9 @@ describe('ProductsService', () => {
     productMediaRepository = createMockRepository<ProductMedia>();
     productAttributeValueRepository =
       createMockRepository<ProductAttributeValue>();
+    productVariantRepository = createMockRepository<ProductVariant>();
     subCategoryRepository = createMockRepository<SubCategory>();
+    userAddressRepository = createMockRepository<UserAddress>();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -124,8 +136,22 @@ describe('ProductsService', () => {
           useValue: productAttributeValueRepository,
         },
         {
+          provide: getRepositoryToken(ProductVariant),
+          useValue: productVariantRepository,
+        },
+        {
           provide: getRepositoryToken(SubCategory),
           useValue: subCategoryRepository,
+        },
+        {
+          provide: getRepositoryToken(UserAddress),
+          useValue: userAddressRepository,
+        },
+        {
+          provide: CloudinaryService,
+          useValue: {
+            uploadFile: jest.fn(),
+          },
         },
       ],
     }).compile();
@@ -161,24 +187,29 @@ describe('ProductsService', () => {
           attributes: true,
         },
       });
-      expect(productRepository.create).toHaveBeenCalledWith({
-        title: createProductDto.title,
-        description: createProductDto.description,
-        price: createProductDto.price,
-        stock: createProductDto.stock,
-        category,
-        subCategory,
-        seller: {
-          id: createProductDto.seller,
-        },
-      });
+      expect(productRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: createProductDto.title,
+          description: createProductDto.description,
+          price: createProductDto.price,
+          stock: createProductDto.stock,
+          category,
+          subCategory,
+          seller: {
+            id: createProductDto.seller,
+          },
+        }),
+      );
       expect(productRepository.save).toHaveBeenCalledWith(productToSave);
       expect(productRepository.findOne).toHaveBeenCalledWith({
         where: { id: savedProduct.id },
         relations: {
           category: true,
           subCategory: true,
+          seller: true,
+          pickupAddress: true,
           media: true,
+          variants: true,
           attributeValues: {
             attribute: true,
           },
@@ -201,6 +232,7 @@ describe('ProductsService', () => {
       const requiredAttribute = {
         id: '5c0f9c97-0970-4770-98c9-68788e458ced',
         name: 'Memoria RAM',
+        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
         required: true,
       };
 
@@ -216,6 +248,198 @@ describe('ProductsService', () => {
       );
       expect(productAttributeValueRepository.save).not.toHaveBeenCalled();
     });
+
+    it('rechaza atributos select con valores fuera de options', async () => {
+      const brandAttribute = {
+        id: '5c0f9c97-0970-4770-98c9-68788e458ced',
+        name: 'Marca',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        required: false,
+        options: ['Nike', 'Adidas'],
+      };
+
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [brandAttribute],
+      });
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+
+      await expect(
+        service.create({
+          ...createProductDto,
+          attributes: [
+            {
+              attributeId: brandAttribute.id,
+              value: 'Puma',
+            },
+          ],
+        }),
+      ).rejects.toThrow('El valor Puma no es valido para Marca');
+      expect(productAttributeValueRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rechaza talle o color de variante fuera de options', async () => {
+      const sizeAttribute = {
+        id: 'size-attribute',
+        name: 'Talle',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.VARIANT_SIZE,
+        required: true,
+        options: ['S', 'M', 'L'],
+      };
+      const colorAttribute = {
+        id: 'color-attribute',
+        name: 'Color',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.VARIANT_COLOR,
+        required: true,
+        options: ['Negro', 'Blanco'],
+      };
+
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [sizeAttribute, colorAttribute],
+      });
+
+      await expect(
+        service.create({
+          ...createProductDto,
+          variants: [
+            {
+              size: 'XL',
+              color: 'Rojo',
+              price: 1200,
+              stock: 2,
+            },
+          ],
+        }),
+      ).rejects.toThrow('El talle XL no es valido para esta subcategoria');
+      expect(productRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('acepta atributos descriptivos y variantes validas', async () => {
+      const brandAttribute = {
+        id: 'brand-attribute',
+        name: 'Marca',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        required: true,
+        options: ['Nike', 'Adidas'],
+      };
+      const sizeAttribute = {
+        id: 'size-attribute',
+        name: 'Talle',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.VARIANT_SIZE,
+        required: true,
+        options: ['S', 'M', 'L'],
+      };
+      const colorAttribute = {
+        id: 'color-attribute',
+        name: 'Color',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.VARIANT_COLOR,
+        required: true,
+        options: ['Negro', 'Blanco'],
+      };
+
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [brandAttribute, sizeAttribute, colorAttribute],
+      });
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productRepository.findOne?.mockResolvedValue(product);
+      productAttributeValueRepository.create?.mockImplementation(data => data);
+      productVariantRepository.create?.mockImplementation(data => data);
+
+      await service.create({
+        ...createProductDto,
+        attributes: [
+          {
+            attributeId: brandAttribute.id,
+            value: 'Nike',
+          },
+        ],
+        variants: [
+          {
+            size: 'M',
+            color: 'Negro',
+            price: 1200,
+            stock: 2,
+          },
+        ],
+      });
+
+      expect(productAttributeValueRepository.create).toHaveBeenCalledWith({
+        value: 'Nike',
+        product: savedProduct,
+        attribute: brandAttribute,
+      });
+      expect(productVariantRepository.create).toHaveBeenCalledWith({
+        size: 'M',
+        color: 'Negro',
+        price: 1200,
+        stock: 2,
+        isActive: true,
+        product: savedProduct,
+      });
+    });
+
+    it('crea variantes por talle cuando se envian en el producto', async () => {
+      const dto: CreateProductDto = {
+        ...createProductDto,
+        variants: [
+          {
+            size: 'M',
+            color: 'Negro',
+            price: 1200,
+            stock: 3,
+          },
+          {
+            size: 'XL',
+            price: 1500,
+            stock: 2,
+            isActive: false,
+          },
+        ],
+      };
+      const variantEntities = dto.variants!.map(variant => ({
+        size: variant.size,
+        color: variant.color ?? null,
+        price: variant.price,
+        stock: variant.stock,
+        isActive: variant.isActive ?? true,
+        product: savedProduct,
+      }));
+
+      subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        variants: variantEntities,
+      });
+      productVariantRepository.create?.mockImplementation(data => data);
+      productVariantRepository.save?.mockResolvedValue(variantEntities);
+
+      await service.create(dto);
+
+      expect(productVariantRepository.create).toHaveBeenCalledTimes(2);
+      expect(productVariantRepository.create).toHaveBeenCalledWith({
+        size: 'M',
+        color: 'Negro',
+        price: 1200,
+        stock: 3,
+        isActive: true,
+        product: savedProduct,
+      });
+      expect(productVariantRepository.save).toHaveBeenCalledWith(
+        variantEntities,
+      );
+    });
   });
 
   describe('findAll', () => {
@@ -225,10 +449,17 @@ describe('ProductsService', () => {
       const result = await service.findAll();
 
       expect(productRepository.find).toHaveBeenCalledWith({
+        where: {
+          isActive: true,
+          approvalStatus: ProductApprovalStatus.APPROVED,
+        },
         relations: {
           category: true,
           subCategory: true,
+          seller: true,
+          pickupAddress: true,
           media: true,
+          variants: true,
           attributeValues: {
             attribute: true,
           },
@@ -252,7 +483,10 @@ describe('ProductsService', () => {
         relations: {
           category: true,
           subCategory: true,
+          seller: true,
+          pickupAddress: true,
           media: true,
+          variants: true,
           attributeValues: {
             attribute: true,
           },
@@ -300,7 +534,10 @@ describe('ProductsService', () => {
         relations: {
           category: true,
           subCategory: true,
+          seller: true,
+          pickupAddress: true,
           media: true,
+          variants: true,
           attributeValues: {
             attribute: true,
           },
@@ -330,7 +567,10 @@ describe('ProductsService', () => {
         relations: {
           category: true,
           subCategory: true,
+          seller: true,
+          pickupAddress: true,
           media: true,
+          variants: true,
           attributeValues: {
             attribute: true,
           },

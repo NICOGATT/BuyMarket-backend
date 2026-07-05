@@ -9,6 +9,7 @@ import {
 
 import { Cart } from '../cart.entity';
 import { Product } from '../../../products/entity/product.entity';
+import { ProductVariant } from '../../../products/entity/product-variant.entity';
 
 @Entity('cart_items')
 export class CartItem {
@@ -26,6 +27,12 @@ export class CartItem {
     eager: true,
   })
   product!: Product;
+
+  @ManyToOne(() => ProductVariant, {
+    nullable: true,
+    eager: true,
+  })
+  variant?: ProductVariant | null;
 
   @Column({ type: 'int', default: 1 })
   quantity!: number;

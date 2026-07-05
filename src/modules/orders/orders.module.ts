@@ -9,6 +9,7 @@ import { OrderItem } from './entities/order-item.entity';
 import { Cart } from '../carts/entities/cart.entity';
 import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Product } from '../products/entity/product.entity';
+import { ProductVariant } from '../products/entity/product-variant.entity';
 import { User } from '../users/entity/user.entity';
 import { Payment } from '../payments/entity/payment.entity';
 import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
@@ -21,6 +22,7 @@ import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment
       Cart,
       CartItem,
       Product,
+      ProductVariant,
       User,
       Payment,
       UserPaymentMethod,

@@ -12,6 +12,7 @@ import { OrderItem } from './entities/order-item.entity';
 import { Cart } from '../carts/entities/cart.entity';
 import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Product } from '../products/entity/product.entity';
+import { ProductVariant } from '../products/entity/product-variant.entity';
 import { User } from '../users/entity/user.entity';
 import {
   CheckoutOrderDto,
@@ -39,6 +40,9 @@ export class OrdersService {
     @InjectRepository(Product)
     private readonly productsRepository : Repository<Product>, 
 
+    @InjectRepository(ProductVariant)
+    private readonly productVariantsRepository : Repository<ProductVariant>,
+
     @InjectRepository(User)
     private readonly userRepository : Repository<User>,
 
@@ -64,7 +68,7 @@ export class OrdersService {
       where : {
         user : {id : userId}
       }, 
-      relations : ['items', 'items.product']
+      relations : ['items', 'items.product', 'items.variant']
     })
 
     if(!cart || !cart.items || cart.items.length === 0){
@@ -74,8 +78,19 @@ export class OrdersService {
     let total = 0; 
 
     for (const item of cart.items) {
-      if(item.product.stock < item.quantity) {
-        throw new BadRequestException(`Stock insuficiente para ${item.product.title}`);
+      const availableStock = item.variant?.stock ?? item.product.stock;
+      const itemName = item.variant
+        ? [
+            item.product.title,
+            `talle ${item.variant.size}`,
+            item.variant.color ? `color ${item.variant.color}` : undefined,
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : item.product.title;
+
+      if(availableStock < item.quantity) {
+        throw new BadRequestException(`Stock insuficiente para ${itemName}`);
       }
 
       total += Number(item.unitPrice) * item.quantity; 
@@ -119,6 +134,7 @@ export class OrdersService {
       this.orderItemsRepository.create({
         order : savedOrder, 
         product : item.product, 
+        variant : item.variant ?? null,
         quantity : item.quantity, 
         unitPrice : item.unitPrice, 
         subtotal : Number(item.unitPrice) * item.quantity
@@ -128,9 +144,15 @@ export class OrdersService {
     await this.orderItemsRepository.save(orderItems); 
 
     for (const item of cart.items){
-      item.product.stock -= item.quantity; 
+      if (item.variant) {
+        item.variant.stock -= item.quantity;
 
-      await this.productsRepository.save(item.product)
+        await this.productVariantsRepository.save(item.variant);
+      } else {
+        item.product.stock -= item.quantity;
+
+        await this.productsRepository.save(item.product);
+      }
     }
 
     await this.cartItemsRepository.delete({
@@ -170,7 +192,7 @@ export class OrdersService {
       where : {
         buyer : {id : userId}
       }, 
-      relations : ['buyer', 'items', 'items.product', 'payment', 'shipment'],
+      relations : ['buyer', 'items', 'items.product', 'items.variant', 'payment', 'shipment'],
       order : {
         createdAt : 'DESC'
       }
@@ -197,6 +219,7 @@ export class OrdersService {
         'product',
         'product.media',
         'product.seller',
+        'variant',
       ],
       order: {
         order: {
@@ -214,6 +237,13 @@ export class OrdersService {
         title: sale.product.title,
         media: sale.product.media ?? [],
       },
+      variant: sale.variant
+        ? {
+            id: sale.variant.id,
+            size: sale.variant.size,
+            color: sale.variant.color ?? null,
+          }
+        : null,
       buyer: {
         id: sale.order.buyer.id,
         firstName: sale.order.buyer.firstName,
@@ -235,7 +265,7 @@ export class OrdersService {
         id,
         buyer: { id: userId },
       },
-      relations: ['buyer', 'items', 'items.product', 'payment', 'shipment'],
+      relations: ['buyer', 'items', 'items.product', 'items.variant', 'payment', 'shipment'],
     });
 
     if (!order) {
@@ -251,6 +281,7 @@ export class OrdersService {
         'buyer',
         'items',
         'items.product',
+        'items.variant',
         'items.product.seller',
         'payment',
         'shipment',

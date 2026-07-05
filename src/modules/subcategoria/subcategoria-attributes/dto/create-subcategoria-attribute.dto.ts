@@ -7,7 +7,10 @@ import {
   IsUUID,
 } from 'class-validator';
 
-import { AttributeType } from '../entities/subcategoria-attribute.entity';
+import {
+  AttributeType,
+  AttributeUsage,
+} from '../entities/subcategoria-attribute.entity';
 
 export class CreateSubCategoryAttributeDto {
   @IsString()
@@ -19,6 +22,10 @@ export class CreateSubCategoryAttributeDto {
   @IsBoolean()
   @IsOptional()
   required?: boolean;
+
+  @IsEnum(AttributeUsage)
+  @IsOptional()
+  usage?: AttributeUsage;
 
   @IsArray()
   @IsString({ each: true })

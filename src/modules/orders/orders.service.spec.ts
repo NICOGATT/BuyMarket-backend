@@ -6,6 +6,7 @@ import { ObjectLiteral, Repository } from 'typeorm';
 import { Cart } from '../carts/entities/cart.entity';
 import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { Payment, PaymentStatus } from '../payments/entity/payment.entity';
+import { ProductVariant } from '../products/entity/product-variant.entity';
 import { Product } from '../products/entity/product.entity';
 import { ShippingType } from '../shipments/entities/shipment.entity';
 import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
@@ -31,6 +32,7 @@ describe('OrdersService', () => {
   let cartsRepository: MockRepository<Cart>;
   let cartItemsRepository: MockRepository<CartItem>;
   let productsRepository: MockRepository<Product>;
+  let productVariantsRepository: MockRepository<ProductVariant>;
   let usersRepository: MockRepository<User>;
   let paymentsRepository: MockRepository<Payment>;
   let userPaymentMethodsRepository: MockRepository<UserPaymentMethod>;
@@ -41,6 +43,7 @@ describe('OrdersService', () => {
     cartsRepository = createMockRepository<Cart>();
     cartItemsRepository = createMockRepository<CartItem>();
     productsRepository = createMockRepository<Product>();
+    productVariantsRepository = createMockRepository<ProductVariant>();
     usersRepository = createMockRepository<User>();
     paymentsRepository = createMockRepository<Payment>();
     userPaymentMethodsRepository = createMockRepository<UserPaymentMethod>();
@@ -67,6 +70,10 @@ describe('OrdersService', () => {
         {
           provide: getRepositoryToken(Product),
           useValue: productsRepository,
+        },
+        {
+          provide: getRepositoryToken(ProductVariant),
+          useValue: productVariantsRepository,
         },
         {
           provide: getRepositoryToken(User),
@@ -409,6 +416,74 @@ describe('OrdersService', () => {
     expect(paymentsRepository.create).not.toHaveBeenCalled();
   });
 
+  it('crea la orden con variante y descuenta stock del talle', async () => {
+    const user = { id: 'buyer-1' } as User;
+    const product = {
+      id: 'product-1',
+      title: 'Remera',
+      stock: 10,
+    } as Product;
+    const variant = {
+      id: 'variant-1',
+      size: 'M',
+      color: 'Negro',
+      price: 1800,
+      stock: 4,
+      isActive: true,
+      product,
+    } as ProductVariant;
+    const cart = {
+      id: 'cart-1',
+      items: [
+        {
+          product,
+          variant,
+          quantity: 2,
+          unitPrice: 1800,
+        },
+      ],
+    } as Cart;
+    const savedOrder = {
+      id: 'order-1',
+      buyer: user,
+      total: 3600,
+      status: OrderStatus.PENDING,
+      deliveryAddress: 'Calle 123',
+      paymentMethod: PaymentMethod.CASH,
+    } as Order;
+
+    usersRepository.findOne?.mockResolvedValue(user);
+    cartsRepository.findOne?.mockResolvedValue(cart);
+    ordersRepository.save?.mockResolvedValue(savedOrder);
+    ordersRepository.findOne?.mockResolvedValue({
+      ...savedOrder,
+      items: [],
+    });
+    orderItemsRepository.save?.mockResolvedValue([]);
+    productVariantsRepository.save?.mockResolvedValue({
+      ...variant,
+      stock: 2,
+    });
+    cartItemsRepository.delete?.mockResolvedValue({ affected: 1 });
+
+    await service.checkout(user.id, {
+      deliveryAddress: 'Calle 123',
+      paymentMethod: PaymentMethod.CASH,
+    });
+
+    expect(orderItemsRepository.create).toHaveBeenCalledWith({
+      order: savedOrder,
+      product,
+      variant,
+      quantity: 2,
+      unitPrice: 1800,
+      subtotal: 3600,
+    });
+    expect(variant.stock).toBe(2);
+    expect(productVariantsRepository.save).toHaveBeenCalledWith(variant);
+    expect(productsRepository.save).not.toHaveBeenCalled();
+  });
+
   it('rechaza checkout nacional sin datos nacionales', async () => {
     const user = { id: 'buyer-1' } as User;
     const product = {
@@ -469,6 +544,11 @@ describe('OrdersService', () => {
         media,
         seller,
       },
+      variant: {
+        id: 'variant-1',
+        size: 'M',
+        color: 'Negro',
+      },
       order: {
         id: 'order-1',
         buyer,
@@ -514,6 +594,7 @@ describe('OrdersService', () => {
           'product',
           'product.media',
           'product.seller',
+          'variant',
         ]),
         order: {
           order: {
@@ -531,6 +612,11 @@ describe('OrdersService', () => {
           id: 'product-1',
           title: 'Teclado',
           media,
+        },
+        variant: {
+          id: 'variant-1',
+          size: 'M',
+          color: 'Negro',
         },
         buyer: {
           id: 'buyer-1',
@@ -553,6 +639,11 @@ describe('OrdersService', () => {
           id: 'product-1',
           title: 'Teclado',
           media,
+        },
+        variant: {
+          id: 'variant-1',
+          size: 'M',
+          color: 'Negro',
         },
         buyer: {
           id: 'buyer-1',

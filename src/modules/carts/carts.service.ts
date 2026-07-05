@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 
 import { Cart } from './entities/cart.entity';
 import { CartItem } from './entities/cart-item.entity/cart-item.entity';
 import { Product } from '../products/entity/product.entity';
+import { ProductVariant } from '../products/entity/product-variant.entity';
 import { User } from '../users/entity/user.entity';
 
 @Injectable()
@@ -19,6 +20,9 @@ export class CartsService {
     @InjectRepository(Product)
     private readonly productsRepository: Repository<Product>,
 
+    @InjectRepository(ProductVariant)
+    private readonly productVariantsRepository: Repository<ProductVariant>,
+
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
@@ -28,7 +32,13 @@ export class CartsService {
       where: {
         user: { id: userId },
       },
-      relations: ['user', 'items', 'items.product', 'items.product.media'],
+      relations: [
+        'user',
+        'items',
+        'items.product',
+        'items.product.media',
+        'items.variant',
+      ],
     });
 
     if (!cart) {
@@ -51,23 +61,56 @@ export class CartsService {
     return cart;
   }
 
-  async addProduct(userId: string, productId: string, quantity: number = 1) {
+  async addProduct(
+    userId: string,
+    productId: string,
+    quantity: number = 1,
+    variantId?: string,
+  ) {
     const cart = await this.getCartByUser(userId);
 
     const product = await this.productsRepository.findOne({
       where: { id: productId },
+      relations: ['variants'],
     });
 
     if (!product) {
       throw new NotFoundException('Producto no encontrado');
     }
 
+    const activeVariants = (product.variants ?? []).filter(
+      variant => variant.isActive,
+    );
+    const requiresVariant = activeVariants.length > 0;
+
+    if (requiresVariant && !variantId) {
+      throw new BadRequestException('Tenes que seleccionar un talle');
+    }
+
+    let variant: ProductVariant | null = null;
+
+    if (variantId) {
+      variant = await this.productVariantsRepository.findOne({
+        where: {
+          id: variantId,
+          product: { id: product.id },
+          isActive: true,
+        },
+        relations: ['product'],
+      });
+
+      if (!variant) {
+        throw new NotFoundException('Variante no encontrada');
+      }
+    }
+
     let item = await this.cartItemsRepository.findOne({
       where: {
         cart: { id: cart.id },
         product: { id: product.id },
+        variant: variant ? { id: variant.id } : IsNull(),
       },
-      relations: ['cart', 'product'],
+      relations: ['cart', 'product', 'variant'],
     });
 
     if (item) {
@@ -76,8 +119,9 @@ export class CartsService {
       item = this.cartItemsRepository.create({
         cart,
         product,
+        variant,
         quantity,
-        unitPrice: Number(product.price),
+        unitPrice: Number(variant?.price ?? product.price),
       });
     }
 

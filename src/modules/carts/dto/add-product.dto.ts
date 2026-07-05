@@ -13,6 +13,10 @@ export class AddProductDto {
   productId!: string;
 
   @IsOptional()
+  @IsUUID()
+  variantId?: string;
+
+  @IsOptional()
   @IsInt()
   @IsPositive()
   @Min(1)

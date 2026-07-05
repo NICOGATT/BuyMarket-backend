@@ -9,7 +9,13 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { Category } from '../categories/entities/category.entity';
 import { ProductMedia, ProductMediaType } from './product-media/entities/product-media.entity';
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
+import { ProductVariant } from './entity/product-variant.entity';
 import { SubCategory } from '../subcategoria/entities/subcategoria.entity';
+import {
+  AttributeType,
+  AttributeUsage,
+  SubCategoryAttribute,
+} from '../subcategoria/subcategoria-attributes/entities/subcategoria-attribute.entity';
 import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 
@@ -24,6 +30,8 @@ export class ProductsService {
     private readonly productMediaRepository : Repository<ProductMedia>, 
     @InjectRepository(ProductAttributeValue)
     private readonly productAttributeValueRepository : Repository<ProductAttributeValue>,
+    @InjectRepository(ProductVariant)
+    private readonly productVariantRepository : Repository<ProductVariant>,
     @InjectRepository(SubCategory)
     private readonly subCategoryRepository: Repository<SubCategory>,
     @InjectRepository(UserAddress)
@@ -44,6 +52,114 @@ export class ProductsService {
     return products;
   }
 
+  private applyVariantPriceAndStock<T extends Product | Product[]>(products: T): T {
+    const productList = Array.isArray(products) ? products : [products];
+
+    productList.forEach(product => {
+      const activeVariants = (product.variants ?? []).filter(
+        variant => variant.isActive,
+      );
+
+      if (activeVariants.length === 0) {
+        return;
+      }
+
+      product.price = Math.min(
+        ...activeVariants.map(variant => Number(variant.price)),
+      );
+      product.stock = activeVariants.reduce(
+        (total, variant) => total + Number(variant.stock),
+        0,
+      );
+    });
+
+    return products;
+  }
+
+  private normalizeProductResponse<T extends Product | Product[]>(products: T): T {
+    this.applyVariantPriceAndStock(products);
+
+    return this.removeSellerPassword(products);
+  }
+
+  private validateProductAttributeValue(
+    attribute: SubCategoryAttribute,
+    value: string,
+  ) {
+    const normalizedValue = String(value).trim();
+
+    const usage = attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE;
+
+    if (usage !== AttributeUsage.PRODUCT_ATTRIBUTE) {
+      throw new BadRequestException(
+        `El atributo ${attribute.name} se usa para variantes`,
+      );
+    }
+
+    if (attribute.type === AttributeType.SELECT) {
+      const options = attribute.options ?? [];
+
+      if (!options.includes(normalizedValue)) {
+        throw new BadRequestException(
+          `El valor ${normalizedValue} no es valido para ${attribute.name}`,
+        );
+      }
+    }
+
+    if (
+      attribute.type === AttributeType.NUMBER &&
+      Number.isNaN(Number(normalizedValue))
+    ) {
+      throw new BadRequestException(
+        `El valor de ${attribute.name} debe ser numerico`,
+      );
+    }
+
+    if (
+      attribute.type === AttributeType.BOOLEAN &&
+      !['true', 'false'].includes(normalizedValue.toLowerCase())
+    ) {
+      throw new BadRequestException(
+        `El valor de ${attribute.name} debe ser booleano`,
+      );
+    }
+  }
+
+  private validateVariantOptions(
+    subCategory: SubCategory,
+    variants?: CreateProductDto['variants'],
+  ) {
+    if (!variants?.length) {
+      return;
+    }
+
+    const sizeAttribute = subCategory.attributes?.find(
+      attribute => attribute.usage === AttributeUsage.VARIANT_SIZE,
+    );
+    const colorAttribute = subCategory.attributes?.find(
+      attribute => attribute.usage === AttributeUsage.VARIANT_COLOR,
+    );
+
+    for (const variant of variants) {
+      const size = variant.size.trim();
+      const color = variant.color?.trim();
+
+      if (sizeAttribute?.options?.length && !sizeAttribute.options.includes(size)) {
+        throw new BadRequestException(
+          `El talle ${size} no es valido para esta subcategoria`,
+        );
+      }
+
+      if (colorAttribute?.options?.length) {
+        if (!color || !colorAttribute.options.includes(color)) {
+          throw new BadRequestException(
+            `El color ${color ?? ''} no es valido para esta subcategoria`,
+          );
+        }
+      }
+    }
+  }
+
   async create(createProductDto: CreateProductDto) {
     let pickupAddress : UserAddress | null = null; 
     const subCategory = await this.subCategoryRepository.findOne({
@@ -59,6 +175,8 @@ export class ProductsService {
     if (!subCategory) {
       throw new NotFoundException('Subcategoría no encontrada');
     }
+
+    this.validateVariantOptions(subCategory, createProductDto.variants);
 
     if(createProductDto.pickupAddressId){
       pickupAddress = await this.userAddressRepository.findOne({
@@ -93,6 +211,21 @@ export class ProductsService {
 
     const savedProduct = await this.productsRepository.save(product);
 
+    if (createProductDto.variants?.length) {
+      const variants = createProductDto.variants.map(variant =>
+        this.productVariantRepository.create({
+          size: variant.size.trim(),
+          color: variant.color?.trim() || null,
+          price: variant.price,
+          stock: variant.stock,
+          isActive: variant.isActive ?? true,
+          product: savedProduct,
+        }),
+      );
+
+      await this.productVariantRepository.save(variants);
+    }
+
     console.log('MEDIA IDS:', createProductDto.mediaIds);
     // Vincular medias subidas previamente
     if (createProductDto.mediaIds?.length) {
@@ -110,7 +243,10 @@ export class ProductsService {
     const sentAttributes = createProductDto.attributes ?? [];
 
     const requiredAttributes = subCategory.attributes.filter(
-      attribute => attribute.required,
+      attribute =>
+        attribute.required &&
+        (attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE) ===
+          AttributeUsage.PRODUCT_ATTRIBUTE,
     );
 
     for (const requiredAttribute of requiredAttributes) {
@@ -137,6 +273,8 @@ export class ProductsService {
           );
         }
 
+        this.validateProductAttributeValue(attribute, item.value);
+
         return this.productAttributeValueRepository.create({
           value: item.value,
           product: savedProduct,
@@ -162,6 +300,7 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
+        variants: true,
         attributeValues: {
           attribute: true,
         },
@@ -171,7 +310,7 @@ export class ProductsService {
       },
     });
 
-    return this.removeSellerPassword(products);
+    return this.normalizeProductResponse(products);
   }
 
   async findAllForAdmin() {
@@ -182,6 +321,7 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
+        variants: true,
         attributeValues: {
           attribute: true,
         },
@@ -191,7 +331,7 @@ export class ProductsService {
       },
     });
 
-    return this.removeSellerPassword(products);
+    return this.normalizeProductResponse(products);
   }
 
   async findOne(id: string) {
@@ -203,6 +343,7 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
+        variants: true,
         attributeValues: {
           attribute: true,
         },
@@ -213,7 +354,7 @@ export class ProductsService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    return this.removeSellerPassword(product);
+    return this.normalizeProductResponse(product);
   }
 
   async findOnePublic(id: string) {
@@ -229,6 +370,7 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
+        variants: true,
         attributeValues: {
           attribute: true,
         },
@@ -239,20 +381,60 @@ export class ProductsService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    return this.removeSellerPassword(product);
+    return this.normalizeProductResponse(product);
   }
 
   async update(
     id: string,
     updateProductDto: UpdateProductDto,
   ) {
-    const { seller, ...rest } = updateProductDto;
+    const { seller, variants, ...rest } = updateProductDto;
     const updateData = {
       ...rest,
       ...(seller ? { seller: { id: seller } } : {}),
     };
 
     await this.productsRepository.update(id, updateData);
+
+    if (variants) {
+      const product = await this.productsRepository.findOne({
+        where: { id },
+        relations: {
+          subCategory: {
+            attributes: true,
+          },
+        },
+      });
+
+      if (!product) {
+        throw new NotFoundException('Producto no encontrado');
+      }
+
+      if (!product.subCategory) {
+        throw new BadRequestException('El producto no tiene subcategoria');
+      }
+
+      this.validateVariantOptions(product.subCategory, variants);
+
+      await this.productVariantRepository.delete({
+        product: { id },
+      });
+
+      if (variants.length > 0) {
+        const nextVariants = variants.map(variant =>
+          this.productVariantRepository.create({
+            size: variant.size.trim(),
+            color: variant.color?.trim() || null,
+            price: variant.price,
+            stock: variant.stock,
+            isActive: variant.isActive ?? true,
+            product,
+          }),
+        );
+
+        await this.productVariantRepository.save(nextVariants);
+      }
+    }
 
     return this.findOne(id);
   }
@@ -346,17 +528,17 @@ export class ProductsService {
           id : userId,
         }
       }, 
-      relations : ['seller', 'pickupAddress'], 
+      relations : ['seller', 'pickupAddress', 'variants'],
       order : {
         createdAt : 'DESC', 
       }
     })
 
-    return this.removeSellerPassword(products);
+    return this.normalizeProductResponse(products);
   }
 
   async findFeatured() {
-    return this.productsRepository.find({
+    const products = await this.productsRepository.find({
       where : {
         isActive : true,
         approvalStatus: ProductApprovalStatus.APPROVED,
@@ -372,10 +554,13 @@ export class ProductsService {
         }, 
         category : true, 
         media : true,
+        variants: true,
       }, 
       order : {
         createdAt : 'DESC'
       }
-    })
+    });
+
+    return this.normalizeProductResponse(products);
   }
 }

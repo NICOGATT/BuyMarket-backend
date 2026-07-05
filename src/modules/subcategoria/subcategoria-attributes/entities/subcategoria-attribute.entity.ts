@@ -18,6 +18,12 @@ export enum AttributeType {
   BOOLEAN = 'boolean',
 }
 
+export enum AttributeUsage {
+  PRODUCT_ATTRIBUTE = 'product_attribute',
+  VARIANT_SIZE = 'variant_size',
+  VARIANT_COLOR = 'variant_color',
+}
+
 @Entity('sub_category_attributes')
 export class SubCategoryAttribute {
   @PrimaryGeneratedColumn('uuid')
@@ -35,6 +41,13 @@ export class SubCategoryAttribute {
 
   @Column({ default: false })
   required!: boolean;
+
+  @Column({
+    type: 'enum',
+    enum: AttributeUsage,
+    default: AttributeUsage.PRODUCT_ATTRIBUTE,
+  })
+  usage!: AttributeUsage;
 
   @Column({ type: 'jsonb', nullable: true })
   options?: string[];

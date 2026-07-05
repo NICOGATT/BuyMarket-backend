@@ -36,6 +36,7 @@ export class CartsController {
       user.id,
       addProductDto.productId,
       addProductDto.quantity ?? 1,
+      addProductDto.variantId,
     );
   }
 

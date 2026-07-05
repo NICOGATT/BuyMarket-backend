@@ -6,7 +6,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { SubCategoryAttribute } from './entities/subcategoria-attribute.entity'; 
+import {
+  AttributeUsage,
+  SubCategoryAttribute,
+} from './entities/subcategoria-attribute.entity';
 import { SubCategory } from '../entities/subcategoria.entity';
 
 import { CreateSubCategoryAttributeDto } from './dto/create-subcategoria-attribute.dto';
@@ -35,6 +38,8 @@ export class SubCategoryAttributesService {
       name: dto.name,
       type: dto.type,
       required: dto.required ?? false,
+      usage: dto.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE,
+      options: dto.options,
       subCategory,
     });
 
@@ -93,6 +98,10 @@ export class SubCategoryAttributesService {
 
     if (dto.required !== undefined) {
       attribute.required = dto.required;
+    }
+
+    if (dto.usage !== undefined) {
+      attribute.usage = dto.usage;
     }
 
     if (dto.options !== undefined) {

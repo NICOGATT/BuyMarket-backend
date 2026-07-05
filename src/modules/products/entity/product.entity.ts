@@ -15,6 +15,7 @@ import { ProductMedia } from '../product-media/entities/product-media.entity';
 import { SubCategory } from '../../subcategoria/entities/subcategoria.entity';
 import { ProductAttributeValue } from './product-attributes-value.entity';
 import { UserAddress } from '../../user-address/entities/user-address.entity';
+import { ProductVariant } from './product-variant.entity';
 
 export enum ProductApprovalStatus {
   PENDING = 'pending',
@@ -42,6 +43,11 @@ export class Product {
 
   @Column({ type: 'int', default: 0 })
   stock!: number;
+
+  @OneToMany(() => ProductVariant, variant => variant.product, {
+    cascade: true,
+  })
+  variants!: ProductVariant[];
 
   @ManyToOne(() => Category, (category) => category.products, {
     nullable: false, 

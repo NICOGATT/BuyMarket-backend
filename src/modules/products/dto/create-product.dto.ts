@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -19,6 +20,28 @@ class CreateProductAttributeValueDto {
   @IsString()
   @IsNotEmpty()
   value!: string;
+}
+
+class CreateProductVariantDto {
+  @IsString()
+  @IsNotEmpty()
+  size!: string;
+
+  @IsString()
+  @IsOptional()
+  color?: string;
+
+  @IsNumber()
+  @IsPositive()
+  price!: number;
+
+  @IsNumber()
+  @Min(0)
+  stock!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
 
 export class CreateProductDto {
@@ -54,6 +77,12 @@ export class CreateProductDto {
   @Type(() => CreateProductAttributeValueDto)
   @IsOptional()
   attributes?: CreateProductAttributeValueDto[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductVariantDto)
+  @IsOptional()
+  variants?: CreateProductVariantDto[];
 
   @IsUUID()
   @IsOptional()

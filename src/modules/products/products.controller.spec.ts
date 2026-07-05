@@ -42,6 +42,7 @@ describe('ProductsController', () => {
       create: jest.fn(),
       findAll: jest.fn(),
       findOne: jest.fn(),
+      findOnePublic: jest.fn(),
       update: jest.fn(),
       remove: jest.fn(),
     };
@@ -114,29 +115,29 @@ describe('ProductsController', () => {
 
   describe('findOne', () => {
     it('should return one product successfully', async () => {
-      jest.spyOn(service, 'findOne').mockResolvedValue(product);
+      jest.spyOn(service, 'findOnePublic').mockResolvedValue(product);
 
       const result = await controller.findOne(productId);
 
-      expect(service.findOne).toHaveBeenCalledWith(productId);
+      expect(service.findOnePublic).toHaveBeenCalledWith(productId);
       expect(result).toEqual(product);
     });
 
     it('should return null when the product does not exist', async () => {
-      jest.spyOn(service, 'findOne').mockResolvedValue(null);
+      jest.spyOn(service, 'findOnePublic').mockResolvedValue(null);
 
       const result = await controller.findOne(productId);
 
-      expect(service.findOne).toHaveBeenCalledWith(productId);
+      expect(service.findOnePublic).toHaveBeenCalledWith(productId);
       expect(result).toBeNull();
     });
 
     it('should propagate exceptions thrown by the service', async () => {
       const error = new Error('findOne failed');
-      jest.spyOn(service, 'findOne').mockRejectedValue(error);
+      jest.spyOn(service, 'findOnePublic').mockRejectedValue(error);
 
       await expect(controller.findOne(productId)).rejects.toThrow(error);
-      expect(service.findOne).toHaveBeenCalledWith(productId);
+      expect(service.findOnePublic).toHaveBeenCalledWith(productId);
     });
   });
 
