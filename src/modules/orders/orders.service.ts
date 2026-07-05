@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
 import { Order, OrderStatus, PaymentMethod } from './entities/order.entity';
@@ -175,6 +175,58 @@ export class OrdersService {
         createdAt : 'DESC'
       }
     })
+  }
+
+  async findMySales(userId: string) {
+    const sales = await this.orderItemsRepository.find({
+      where: {
+        product: {
+          seller: {
+            id: userId,
+          },
+        },
+        order: {
+          status: In([OrderStatus.PAID, OrderStatus.DELIVERED]),
+        },
+      },
+      relations: [
+        'order',
+        'order.buyer',
+        'order.payment',
+        'order.shipment',
+        'product',
+        'product.media',
+        'product.seller',
+      ],
+      order: {
+        order: {
+          createdAt: 'DESC',
+        },
+      },
+    });
+
+    return sales.map((sale) => ({
+      saleId: sale.id,
+      orderItemId: sale.id,
+      orderId: sale.order.id,
+      product: {
+        id: sale.product.id,
+        title: sale.product.title,
+        media: sale.product.media ?? [],
+      },
+      buyer: {
+        id: sale.order.buyer.id,
+        firstName: sale.order.buyer.firstName,
+        lastName: sale.order.buyer.lastName,
+      },
+      quantity: sale.quantity,
+      unitPrice: Number(sale.unitPrice),
+      subtotal: Number(sale.subtotal),
+      orderStatus: sale.order.status,
+      paymentMethod: sale.order.paymentMethod,
+      shippingType: sale.order.shippingType,
+      createdAt: sale.order.createdAt,
+    }));
   }
 
   async findOne(id: string, userId: string) {

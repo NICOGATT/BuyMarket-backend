@@ -439,4 +439,136 @@ describe('OrdersService', () => {
 
     expect(ordersRepository.create).not.toHaveBeenCalled();
   });
+
+  it('devuelve las ventas confirmadas del vendedor sin datos sensibles', async () => {
+    const seller = {
+      id: 'seller-1',
+      password: 'seller-secret',
+    } as User;
+    const buyer = {
+      id: 'buyer-1',
+      firstName: 'Juan',
+      lastName: 'Perez',
+      password: 'buyer-secret',
+    } as User;
+    const createdAt = new Date('2026-01-10T10:00:00.000Z');
+    const media = [
+      {
+        id: 'media-1',
+        url: 'https://example.com/product.jpg',
+      },
+    ];
+    const paidSale = {
+      id: 'item-1',
+      quantity: 2,
+      unitPrice: 1500,
+      subtotal: 3000,
+      product: {
+        id: 'product-1',
+        title: 'Teclado',
+        media,
+        seller,
+      },
+      order: {
+        id: 'order-1',
+        buyer,
+        status: OrderStatus.PAID,
+        paymentMethod: PaymentMethod.TRANSFER,
+        shippingType: ShippingType.LOCAL_DELIVERY,
+        createdAt,
+      },
+    } as unknown as OrderItem;
+    const deliveredSale = {
+      ...paidSale,
+      id: 'item-2',
+      order: {
+        ...paidSale.order,
+        id: 'order-2',
+        status: OrderStatus.DELIVERED,
+      },
+    } as unknown as OrderItem;
+
+    orderItemsRepository.find?.mockResolvedValue([paidSale, deliveredSale]);
+
+    const result = await service.findMySales(seller.id);
+
+    expect(orderItemsRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          product: {
+            seller: {
+              id: seller.id,
+            },
+          },
+          order: expect.objectContaining({
+            status: expect.objectContaining({
+              _value: [OrderStatus.PAID, OrderStatus.DELIVERED],
+            }),
+          }),
+        }),
+        relations: expect.arrayContaining([
+          'order',
+          'order.buyer',
+          'order.payment',
+          'order.shipment',
+          'product',
+          'product.media',
+          'product.seller',
+        ]),
+        order: {
+          order: {
+            createdAt: 'DESC',
+          },
+        },
+      }),
+    );
+    expect(result).toEqual([
+      {
+        saleId: 'item-1',
+        orderItemId: 'item-1',
+        orderId: 'order-1',
+        product: {
+          id: 'product-1',
+          title: 'Teclado',
+          media,
+        },
+        buyer: {
+          id: 'buyer-1',
+          firstName: 'Juan',
+          lastName: 'Perez',
+        },
+        quantity: 2,
+        unitPrice: 1500,
+        subtotal: 3000,
+        orderStatus: OrderStatus.PAID,
+        paymentMethod: PaymentMethod.TRANSFER,
+        shippingType: ShippingType.LOCAL_DELIVERY,
+        createdAt,
+      },
+      {
+        saleId: 'item-2',
+        orderItemId: 'item-2',
+        orderId: 'order-2',
+        product: {
+          id: 'product-1',
+          title: 'Teclado',
+          media,
+        },
+        buyer: {
+          id: 'buyer-1',
+          firstName: 'Juan',
+          lastName: 'Perez',
+        },
+        quantity: 2,
+        unitPrice: 1500,
+        subtotal: 3000,
+        orderStatus: OrderStatus.DELIVERED,
+        paymentMethod: PaymentMethod.TRANSFER,
+        shippingType: ShippingType.LOCAL_DELIVERY,
+        createdAt,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('buyer-secret');
+    expect(JSON.stringify(result)).not.toContain('seller-secret');
+  });
 });

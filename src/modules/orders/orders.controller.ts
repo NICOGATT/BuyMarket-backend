@@ -33,6 +33,11 @@ export class OrdersController {
     return this.ordersService.findMyOrders(user.id);
   }
 
+  @Get('my-sales')
+  findMySales(@CurrentUser() user: any) {
+    return this.ordersService.findMySales(user.id);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @Get('admin/all')
