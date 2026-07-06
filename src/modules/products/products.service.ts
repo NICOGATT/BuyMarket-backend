@@ -388,10 +388,20 @@ export class ProductsService {
     id: string,
     updateProductDto: UpdateProductDto,
   ) {
-    const { seller, variants, ...rest } = updateProductDto;
+    const {
+      seller,
+      variants,
+      attributes,
+      mediaIds,
+      subCategoryId,
+      pickupAddressId,
+      ...rest
+    } = updateProductDto;
     const updateData = {
       ...rest,
       ...(seller ? { seller: { id: seller } } : {}),
+      ...(subCategoryId ? { subCategory: { id: subCategoryId } } : {}),
+      ...(pickupAddressId ? { pickupAddress: { id: pickupAddressId } } : {}),
     };
 
     await this.productsRepository.update(id, updateData);

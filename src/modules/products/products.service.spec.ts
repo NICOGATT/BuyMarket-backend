@@ -546,6 +546,44 @@ describe('ProductsService', () => {
       expect(result).toEqual(updatedProduct);
     });
 
+    it('mapea subCategoryId y no lo envia como propiedad directa de Product', async () => {
+      const updateProductDto: UpdateProductDto = {
+        title: 'Notebook gamer actualizada',
+        subCategoryId: subCategory.id,
+        pickupAddressId: '8c8ad2ab-45e8-4be7-ae17-e60a1446f2da',
+        mediaIds: ['d09a2b9d-1bc8-4aae-89d3-d652d09b9f10'],
+        attributes: [
+          {
+            attributeId: '5c0f9c97-0970-4770-98c9-68788e458ced',
+            value: 'Nike',
+          },
+        ],
+      };
+
+      productRepository.update?.mockResolvedValue({ affected: 1 });
+      productRepository.findOne?.mockResolvedValue(product);
+
+      await service.update(productId, updateProductDto);
+
+      expect(productRepository.update).toHaveBeenCalledWith(productId, {
+        title: updateProductDto.title,
+        subCategory: {
+          id: subCategory.id,
+        },
+        pickupAddress: {
+          id: updateProductDto.pickupAddressId,
+        },
+      });
+      expect(productRepository.update).not.toHaveBeenCalledWith(
+        productId,
+        expect.objectContaining({
+          subCategoryId: expect.any(String),
+          mediaIds: expect.any(Array),
+          attributes: expect.any(Array),
+        }),
+      );
+    });
+
     it('lanza NotFoundException si el producto actualizado no existe', async () => {
       productRepository.update?.mockResolvedValue({ affected: 0 });
       productRepository.findOne?.mockResolvedValue(null);
