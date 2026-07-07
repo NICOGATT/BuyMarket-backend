@@ -3,11 +3,13 @@ import {
   CreateDateColumn,
   Entity,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
 import { Product } from './product.entity';
+import { ProductVariantAttributeValue } from './product-variant-attribute-value.entity';
 
 @Entity('product_variants')
 export class ProductVariant {
@@ -38,6 +40,15 @@ export class ProductVariant {
     onDelete: 'CASCADE',
   })
   product!: Product;
+
+  @OneToMany(
+    () => ProductVariantAttributeValue,
+    value => value.variant,
+    {
+      cascade: true,
+    },
+  )
+  attributes!: ProductVariantAttributeValue[];
 
   @CreateDateColumn()
   createdAt!: Date;

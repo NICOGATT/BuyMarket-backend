@@ -13,6 +13,7 @@ import { UserRole } from '../users/entity/user.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
+import { ProductVariantAttributeValue } from './entity/product-variant-attribute-value.entity';
 import { ProductVariant } from './entity/product-variant.entity';
 import { Product, ProductApprovalStatus } from './entity/product.entity';
 import { ProductMedia } from './product-media/entities/product-media.entity';
@@ -42,6 +43,7 @@ describe('ProductsService', () => {
   let productMediaRepository: MockRepository<ProductMedia>;
   let productAttributeValueRepository: MockRepository<ProductAttributeValue>;
   let productVariantRepository: MockRepository<ProductVariant>;
+  let productVariantAttributeValueRepository: MockRepository<ProductVariantAttributeValue>;
   let subCategoryRepository: MockRepository<SubCategory>;
   let userAddressRepository: MockRepository<UserAddress>;
 
@@ -113,6 +115,8 @@ describe('ProductsService', () => {
     productAttributeValueRepository =
       createMockRepository<ProductAttributeValue>();
     productVariantRepository = createMockRepository<ProductVariant>();
+    productVariantAttributeValueRepository =
+      createMockRepository<ProductVariantAttributeValue>();
     subCategoryRepository = createMockRepository<SubCategory>();
     userAddressRepository = createMockRepository<UserAddress>();
 
@@ -138,6 +142,10 @@ describe('ProductsService', () => {
         {
           provide: getRepositoryToken(ProductVariant),
           useValue: productVariantRepository,
+        },
+        {
+          provide: getRepositoryToken(ProductVariantAttributeValue),
+          useValue: productVariantAttributeValueRepository,
         },
         {
           provide: getRepositoryToken(SubCategory),
@@ -166,6 +174,7 @@ describe('ProductsService', () => {
     expect(categoryRepository).toBeDefined();
     expect(productMediaRepository).toBeDefined();
     expect(productAttributeValueRepository).toBeDefined();
+    expect(productVariantAttributeValueRepository).toBeDefined();
     expect(subCategoryRepository).toBeDefined();
   });
 
@@ -209,7 +218,11 @@ describe('ProductsService', () => {
           seller: true,
           pickupAddress: true,
           media: true,
-          variants: true,
+          variants: {
+            attributes: {
+              attribute: true,
+            },
+          },
           attributeValues: {
             attribute: true,
           },
@@ -423,7 +436,9 @@ describe('ProductsService', () => {
         variants: variantEntities,
       });
       productVariantRepository.create?.mockImplementation(data => data);
-      productVariantRepository.save?.mockResolvedValue(variantEntities);
+      productVariantRepository.save?.mockImplementation(data =>
+        Promise.resolve(data),
+      );
 
       await service.create(dto);
 
@@ -436,9 +451,101 @@ describe('ProductsService', () => {
         isActive: true,
         product: savedProduct,
       });
-      expect(productVariantRepository.save).toHaveBeenCalledWith(
-        variantEntities,
+      expect(productVariantRepository.save).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          size: 'M',
+          color: 'Negro',
+          price: 1200,
+          stock: 3,
+          isActive: true,
+          product: savedProduct,
+        }),
       );
+      expect(productVariantRepository.save).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          size: 'XL',
+          color: null,
+          price: 1500,
+          stock: 2,
+          isActive: false,
+          product: savedProduct,
+        }),
+      );
+    });
+
+    it('guarda atributos dinamicos propios para cada variante', async () => {
+      const lengthAttribute = {
+        id: 'length-attribute',
+        name: 'Largo de lomo',
+        type: AttributeType.TEXT,
+        required: true,
+        appliesToVariant: true,
+        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+      };
+      const dto: CreateProductDto = {
+        ...createProductDto,
+        variants: [
+          {
+            size: 'S',
+            color: 'Rosa',
+            price: 40000,
+            stock: 2,
+            attributes: [
+              {
+                attributeId: lengthAttribute.id,
+                value: '20cm',
+              },
+            ],
+          },
+          {
+            size: 'M',
+            color: 'Rosa',
+            price: 42000,
+            stock: 2,
+            attributes: [
+              {
+                attributeId: lengthAttribute.id,
+                value: '25cm',
+              },
+            ],
+          },
+        ],
+      };
+      let variantId = 0;
+
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [lengthAttribute],
+      });
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productRepository.findOne?.mockResolvedValue(product);
+      productVariantRepository.create?.mockImplementation(data => data);
+      productVariantRepository.save?.mockImplementation(data =>
+        Promise.resolve({
+          ...data,
+          id: `variant-${++variantId}`,
+        }),
+      );
+      productVariantAttributeValueRepository.create?.mockImplementation(
+        data => data,
+      );
+
+      await service.create(dto);
+
+      expect(productVariantAttributeValueRepository.create).toHaveBeenCalledWith({
+        value: '20cm',
+        variant: expect.objectContaining({ id: 'variant-1' }),
+        attribute: lengthAttribute,
+      });
+      expect(productVariantAttributeValueRepository.create).toHaveBeenCalledWith({
+        value: '25cm',
+        variant: expect.objectContaining({ id: 'variant-2' }),
+        attribute: lengthAttribute,
+      });
+      expect(productVariantAttributeValueRepository.save).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -459,7 +566,11 @@ describe('ProductsService', () => {
           seller: true,
           pickupAddress: true,
           media: true,
-          variants: true,
+          variants: {
+            attributes: {
+              attribute: true,
+            },
+          },
           attributeValues: {
             attribute: true,
           },
@@ -486,7 +597,11 @@ describe('ProductsService', () => {
           seller: true,
           pickupAddress: true,
           media: true,
-          variants: true,
+          variants: {
+            attributes: {
+              attribute: true,
+            },
+          },
           attributeValues: {
             attribute: true,
           },
@@ -537,7 +652,11 @@ describe('ProductsService', () => {
           seller: true,
           pickupAddress: true,
           media: true,
-          variants: true,
+          variants: {
+            attributes: {
+              attribute: true,
+            },
+          },
           attributeValues: {
             attribute: true,
           },
@@ -608,7 +727,11 @@ describe('ProductsService', () => {
           seller: true,
           pickupAddress: true,
           media: true,
-          variants: true,
+          variants: {
+            attributes: {
+              attribute: true,
+            },
+          },
           attributeValues: {
             attribute: true,
           },

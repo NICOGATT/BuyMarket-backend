@@ -42,6 +42,12 @@ class CreateProductVariantDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductAttributeValueDto)
+  @IsOptional()
+  attributes?: CreateProductAttributeValueDto[];
 }
 
 export class CreateProductDto {

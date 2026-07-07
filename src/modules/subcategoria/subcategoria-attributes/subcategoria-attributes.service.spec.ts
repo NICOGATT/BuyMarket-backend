@@ -75,6 +75,7 @@ describe('SubCategoryAttributesService', () => {
       name: dto.name,
       type: dto.type,
       required: true,
+      appliesToVariant: false,
       usage: AttributeUsage.VARIANT_SIZE,
       options: dto.options,
       subCategory,
@@ -100,6 +101,7 @@ describe('SubCategoryAttributesService', () => {
 
     expect(attributeRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
+        appliesToVariant: false,
         usage: AttributeUsage.PRODUCT_ATTRIBUTE,
       }),
     );

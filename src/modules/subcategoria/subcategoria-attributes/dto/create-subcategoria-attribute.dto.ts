@@ -23,6 +23,10 @@ export class CreateSubCategoryAttributeDto {
   @IsOptional()
   required?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  appliesToVariant?: boolean;
+
   @IsEnum(AttributeUsage)
   @IsOptional()
   usage?: AttributeUsage;

@@ -38,6 +38,7 @@ export class SubCategoryAttributesService {
       name: dto.name,
       type: dto.type,
       required: dto.required ?? false,
+      appliesToVariant: dto.appliesToVariant ?? false,
       usage: dto.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE,
       options: dto.options,
       subCategory,
@@ -98,6 +99,10 @@ export class SubCategoryAttributesService {
 
     if (dto.required !== undefined) {
       attribute.required = dto.required;
+    }
+
+    if (dto.appliesToVariant !== undefined) {
+      attribute.appliesToVariant = dto.appliesToVariant;
     }
 
     if (dto.usage !== undefined) {

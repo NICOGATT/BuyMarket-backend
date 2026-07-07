@@ -10,6 +10,7 @@ import {
 
 import { SubCategory } from '../../entities/subcategoria.entity';
 import { ProductAttributeValue } from '../../../products/entity/product-attributes-value.entity'; 
+import { ProductVariantAttributeValue } from '../../../products/entity/product-variant-attribute-value.entity';
 
 export enum AttributeType {
   TEXT = 'text',
@@ -42,6 +43,9 @@ export class SubCategoryAttribute {
   @Column({ default: false })
   required!: boolean;
 
+  @Column({ default: false })
+  appliesToVariant!: boolean;
+
   @Column({
     type: 'enum',
     enum: AttributeUsage,
@@ -66,6 +70,12 @@ export class SubCategoryAttribute {
     value => value.attribute,
   )
   values!: ProductAttributeValue[];
+
+  @OneToMany(
+    () => ProductVariantAttributeValue,
+    value => value.attribute,
+  )
+  variantValues!: ProductVariantAttributeValue[];
 
   @CreateDateColumn()
   createdAt!: Date;

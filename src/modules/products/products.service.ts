@@ -9,6 +9,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { Category } from '../categories/entities/category.entity';
 import { ProductMedia, ProductMediaType } from './product-media/entities/product-media.entity';
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
+import { ProductVariantAttributeValue } from './entity/product-variant-attribute-value.entity';
 import { ProductVariant } from './entity/product-variant.entity';
 import { SubCategory } from '../subcategoria/entities/subcategoria.entity';
 import {
@@ -32,6 +33,8 @@ export class ProductsService {
     private readonly productAttributeValueRepository : Repository<ProductAttributeValue>,
     @InjectRepository(ProductVariant)
     private readonly productVariantRepository : Repository<ProductVariant>,
+    @InjectRepository(ProductVariantAttributeValue)
+    private readonly productVariantAttributeValueRepository : Repository<ProductVariantAttributeValue>,
     @InjectRepository(SubCategory)
     private readonly subCategoryRepository: Repository<SubCategory>,
     @InjectRepository(UserAddress)
@@ -78,23 +81,37 @@ export class ProductsService {
 
   private normalizeProductResponse<T extends Product | Product[]>(products: T): T {
     this.applyVariantPriceAndStock(products);
+    this.normalizeVariantAttributes(products);
 
     return this.removeSellerPassword(products);
   }
 
-  private validateProductAttributeValue(
+  private normalizeVariantAttributes<T extends Product | Product[]>(products: T): T {
+    const productList = Array.isArray(products) ? products : [products];
+
+    productList.forEach(product => {
+      (product.variants ?? []).forEach(variant => {
+        const attributes = (variant.attributes ?? []).map(value => ({
+          id: value.id,
+          attributeId: value.attribute?.id,
+          name: value.attribute?.name,
+          type: value.attribute?.type,
+          value: value.value,
+        }));
+
+        (variant as unknown as { attributes: typeof attributes }).attributes =
+          attributes;
+      });
+    });
+
+    return products;
+  }
+
+  private validateAttributeValueType(
     attribute: SubCategoryAttribute,
     value: string,
   ) {
     const normalizedValue = String(value).trim();
-
-    const usage = attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE;
-
-    if (usage !== AttributeUsage.PRODUCT_ATTRIBUTE) {
-      throw new BadRequestException(
-        `El atributo ${attribute.name} se usa para variantes`,
-      );
-    }
 
     if (attribute.type === AttributeType.SELECT) {
       const options = attribute.options ?? [];
@@ -123,6 +140,82 @@ export class ProductsService {
         `El valor de ${attribute.name} debe ser booleano`,
       );
     }
+  }
+
+  private validateProductAttributeValue(
+    attribute: SubCategoryAttribute,
+    value: string,
+  ) {
+    const usage = attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE;
+
+    if (attribute.appliesToVariant || usage !== AttributeUsage.PRODUCT_ATTRIBUTE) {
+      throw new BadRequestException(
+        `El atributo ${attribute.name} se usa para variantes`,
+      );
+    }
+
+    this.validateAttributeValueType(attribute, value);
+  }
+
+  private validateVariantAttributeValue(
+    attribute: SubCategoryAttribute,
+    value: string,
+  ) {
+    if (!attribute.appliesToVariant) {
+      throw new BadRequestException(
+        `El atributo ${attribute.name} no se usa para variantes`,
+      );
+    }
+
+    this.validateAttributeValueType(attribute, value);
+  }
+
+  private validateRequiredVariantAttributes(
+    subCategory: SubCategory,
+    variant: NonNullable<CreateProductDto['variants']>[number],
+  ) {
+    const sentAttributes = variant.attributes ?? [];
+    const requiredAttributes = subCategory.attributes.filter(
+      attribute => attribute.required && attribute.appliesToVariant,
+    );
+
+    for (const requiredAttribute of requiredAttributes) {
+      const exists = sentAttributes.some(
+        item => item.attributeId === requiredAttribute.id,
+      );
+
+      if (!exists) {
+        throw new BadRequestException(
+          `El atributo ${requiredAttribute.name} es obligatorio para la variante ${variant.size}`,
+        );
+      }
+    }
+  }
+
+  private buildVariantAttributeValues(
+    subCategory: SubCategory,
+    variant: NonNullable<CreateProductDto['variants']>[number],
+    savedVariant: ProductVariant,
+  ) {
+    return (variant.attributes ?? []).map(item => {
+      const attribute = subCategory.attributes.find(
+        attr => attr.id === item.attributeId,
+      );
+
+      if (!attribute) {
+        throw new BadRequestException(
+          `El atributo ${item.attributeId} no pertenece a esta subcategoría`,
+        );
+      }
+
+      this.validateVariantAttributeValue(attribute, item.value);
+
+      return this.productVariantAttributeValueRepository.create({
+        value: item.value,
+        variant: savedVariant,
+        attribute,
+      });
+    });
   }
 
   private validateVariantOptions(
@@ -212,18 +305,29 @@ export class ProductsService {
     const savedProduct = await this.productsRepository.save(product);
 
     if (createProductDto.variants?.length) {
-      const variants = createProductDto.variants.map(variant =>
-        this.productVariantRepository.create({
+      for (const variant of createProductDto.variants) {
+        this.validateRequiredVariantAttributes(subCategory, variant);
+
+        const variantEntity = this.productVariantRepository.create({
           size: variant.size.trim(),
           color: variant.color?.trim() || null,
           price: variant.price,
           stock: variant.stock,
           isActive: variant.isActive ?? true,
           product: savedProduct,
-        }),
-      );
+        });
 
-      await this.productVariantRepository.save(variants);
+        const savedVariant = await this.productVariantRepository.save(variantEntity);
+        const attributeValues = this.buildVariantAttributeValues(
+          subCategory,
+          variant,
+          savedVariant,
+        );
+
+        if (attributeValues.length > 0) {
+          await this.productVariantAttributeValueRepository.save(attributeValues);
+        }
+      }
     }
 
     console.log('MEDIA IDS:', createProductDto.mediaIds);
@@ -245,6 +349,7 @@ export class ProductsService {
     const requiredAttributes = subCategory.attributes.filter(
       attribute =>
         attribute.required &&
+        !attribute.appliesToVariant &&
         (attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE) ===
           AttributeUsage.PRODUCT_ATTRIBUTE,
     );
@@ -300,7 +405,11 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
-        variants: true,
+        variants: {
+          attributes: {
+            attribute: true,
+          },
+        },
         attributeValues: {
           attribute: true,
         },
@@ -321,7 +430,11 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
-        variants: true,
+        variants: {
+          attributes: {
+            attribute: true,
+          },
+        },
         attributeValues: {
           attribute: true,
         },
@@ -343,7 +456,11 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
-        variants: true,
+        variants: {
+          attributes: {
+            attribute: true,
+          },
+        },
         attributeValues: {
           attribute: true,
         },
@@ -370,7 +487,11 @@ export class ProductsService {
         seller: true,
         pickupAddress: true,
         media: true,
-        variants: true,
+        variants: {
+          attributes: {
+            attribute: true,
+          },
+        },
         attributeValues: {
           attribute: true,
         },
@@ -431,18 +552,29 @@ export class ProductsService {
       });
 
       if (variants.length > 0) {
-        const nextVariants = variants.map(variant =>
-          this.productVariantRepository.create({
+        for (const variant of variants) {
+          this.validateRequiredVariantAttributes(product.subCategory, variant);
+
+          const nextVariant = this.productVariantRepository.create({
             size: variant.size.trim(),
             color: variant.color?.trim() || null,
             price: variant.price,
             stock: variant.stock,
             isActive: variant.isActive ?? true,
             product,
-          }),
-        );
+          });
 
-        await this.productVariantRepository.save(nextVariants);
+          const savedVariant = await this.productVariantRepository.save(nextVariant);
+          const attributeValues = this.buildVariantAttributeValues(
+            product.subCategory,
+            variant,
+            savedVariant,
+          );
+
+          if (attributeValues.length > 0) {
+            await this.productVariantAttributeValueRepository.save(attributeValues);
+          }
+        }
       }
     }
 
@@ -538,7 +670,15 @@ export class ProductsService {
           id : userId,
         }
       }, 
-      relations : ['seller', 'pickupAddress', 'variants'],
+      relations : {
+        seller: true,
+        pickupAddress: true,
+        variants: {
+          attributes: {
+            attribute: true,
+          },
+        },
+      },
       order : {
         createdAt : 'DESC', 
       }
@@ -564,7 +704,11 @@ export class ProductsService {
         }, 
         category : true, 
         media : true,
-        variants: true,
+        variants: {
+          attributes: {
+            attribute: true,
+          },
+        },
       }, 
       order : {
         createdAt : 'DESC'
