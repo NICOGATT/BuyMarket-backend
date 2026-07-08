@@ -1,10 +1,11 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+﻿import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ObjectLiteral, Repository } from 'typeorm';
 
 import { Category } from '../categories/entities/category.entity';
 import {
+  AttributeAppliesTo,
   AttributeType,
   AttributeUsage,
 } from '../subcategoria/subcategoria-attributes/entities/subcategoria-attribute.entity';
@@ -246,6 +247,7 @@ describe('ProductsService', () => {
         id: '5c0f9c97-0970-4770-98c9-68788e458ced',
         name: 'Memoria RAM',
         usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        appliesTo: AttributeAppliesTo.PRODUCT,
         required: true,
       };
 
@@ -268,6 +270,7 @@ describe('ProductsService', () => {
         name: 'Marca',
         type: AttributeType.SELECT,
         usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        appliesTo: AttributeAppliesTo.PRODUCT,
         required: false,
         options: ['Nike', 'Adidas'],
       };
@@ -293,12 +296,86 @@ describe('ProductsService', () => {
       expect(productAttributeValueRepository.save).not.toHaveBeenCalled();
     });
 
+    it('rechaza atributos de variante enviados como atributos generales', async () => {
+      const variantAttribute = {
+        id: 'length-attribute',
+        name: 'Largo de lomo',
+        type: AttributeType.TEXT,
+        usage: AttributeUsage.VARIANT_ATTRIBUTE,
+        appliesTo: AttributeAppliesTo.VARIANT,
+        required: false,
+      };
+
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [variantAttribute],
+      });
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+
+      await expect(
+        service.create({
+          ...createProductDto,
+          attributes: [
+            {
+              attributeId: variantAttribute.id,
+              value: '20cm',
+            },
+          ],
+        }),
+      ).rejects.toThrow('El atributo Largo de lomo se usa para variantes');
+      expect(productAttributeValueRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rechaza atributos de producto enviados dentro de variantes', async () => {
+      const productAttribute = {
+        id: 'brand-attribute',
+        name: 'Marca',
+        type: AttributeType.TEXT,
+        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        appliesTo: AttributeAppliesTo.PRODUCT,
+        required: false,
+      };
+
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [productAttribute],
+      });
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productVariantRepository.create?.mockImplementation(data => data);
+      productVariantRepository.save?.mockResolvedValue({
+        id: 'variant-1',
+      });
+
+      await expect(
+        service.create({
+          ...createProductDto,
+          variants: [
+            {
+              size: 'M',
+              price: 1200,
+              stock: 2,
+              attributes: [
+                {
+                  attributeId: productAttribute.id,
+                  value: 'Nike',
+                },
+              ],
+            },
+          ],
+        }),
+      ).rejects.toThrow('El atributo Marca no se usa para variantes');
+      expect(productVariantAttributeValueRepository.save).not.toHaveBeenCalled();
+    });
+
     it('rechaza talle o color de variante fuera de options', async () => {
       const sizeAttribute = {
         id: 'size-attribute',
         name: 'Talle',
         type: AttributeType.SELECT,
         usage: AttributeUsage.VARIANT_SIZE,
+        appliesTo: AttributeAppliesTo.VARIANT,
         required: true,
         options: ['S', 'M', 'L'],
       };
@@ -307,6 +384,7 @@ describe('ProductsService', () => {
         name: 'Color',
         type: AttributeType.SELECT,
         usage: AttributeUsage.VARIANT_COLOR,
+        appliesTo: AttributeAppliesTo.VARIANT,
         required: true,
         options: ['Negro', 'Blanco'],
       };
@@ -338,6 +416,7 @@ describe('ProductsService', () => {
         name: 'Marca',
         type: AttributeType.SELECT,
         usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        appliesTo: AttributeAppliesTo.PRODUCT,
         required: true,
         options: ['Nike', 'Adidas'],
       };
@@ -346,6 +425,7 @@ describe('ProductsService', () => {
         name: 'Talle',
         type: AttributeType.SELECT,
         usage: AttributeUsage.VARIANT_SIZE,
+        appliesTo: AttributeAppliesTo.VARIANT,
         required: true,
         options: ['S', 'M', 'L'],
       };
@@ -354,6 +434,7 @@ describe('ProductsService', () => {
         name: 'Color',
         type: AttributeType.SELECT,
         usage: AttributeUsage.VARIANT_COLOR,
+        appliesTo: AttributeAppliesTo.VARIANT,
         required: true,
         options: ['Negro', 'Blanco'],
       };
@@ -481,8 +562,9 @@ describe('ProductsService', () => {
         name: 'Largo de lomo',
         type: AttributeType.TEXT,
         required: true,
+        appliesTo: AttributeAppliesTo.VARIANT,
         appliesToVariant: true,
-        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        usage: AttributeUsage.VARIANT_ATTRIBUTE,
       };
       const dto: CreateProductDto = {
         ...createProductDto,
@@ -751,3 +833,4 @@ describe('ProductsService', () => {
     });
   });
 });
+

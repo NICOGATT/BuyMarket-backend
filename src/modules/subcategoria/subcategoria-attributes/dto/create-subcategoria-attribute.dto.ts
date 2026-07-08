@@ -2,12 +2,14 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
 } from 'class-validator';
 
 import {
+  AttributeAppliesTo,
   AttributeType,
   AttributeUsage,
 } from '../entities/subcategoria-attribute.entity';
@@ -22,6 +24,10 @@ export class CreateSubCategoryAttributeDto {
   @IsBoolean()
   @IsOptional()
   required?: boolean;
+
+  @IsEnum(AttributeAppliesTo)
+  @IsNotEmpty()
+  appliesTo!: AttributeAppliesTo;
 
   @IsBoolean()
   @IsOptional()
@@ -39,3 +45,4 @@ export class CreateSubCategoryAttributeDto {
   @IsUUID()
   subCategoryId!: string;
 }
+

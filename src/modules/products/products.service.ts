@@ -13,10 +13,12 @@ import { ProductVariantAttributeValue } from './entity/product-variant-attribute
 import { ProductVariant } from './entity/product-variant.entity';
 import { SubCategory } from '../subcategoria/entities/subcategoria.entity';
 import {
+  AttributeAppliesTo,
   AttributeType,
   AttributeUsage,
   SubCategoryAttribute,
 } from '../subcategoria/subcategoria-attributes/entities/subcategoria-attribute.entity';
+import { normalizeSubCategoryAttributesAppliesTo } from '../subcategoria/subcategoria-attributes/attribute-applies-to.util';
 import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 
@@ -146,9 +148,7 @@ export class ProductsService {
     attribute: SubCategoryAttribute,
     value: string,
   ) {
-    const usage = attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE;
-
-    if (attribute.appliesToVariant || usage !== AttributeUsage.PRODUCT_ATTRIBUTE) {
+    if (attribute.appliesTo !== AttributeAppliesTo.PRODUCT) {
       throw new BadRequestException(
         `El atributo ${attribute.name} se usa para variantes`,
       );
@@ -161,7 +161,7 @@ export class ProductsService {
     attribute: SubCategoryAttribute,
     value: string,
   ) {
-    if (!attribute.appliesToVariant) {
+    if (attribute.appliesTo !== AttributeAppliesTo.VARIANT) {
       throw new BadRequestException(
         `El atributo ${attribute.name} no se usa para variantes`,
       );
@@ -176,7 +176,11 @@ export class ProductsService {
   ) {
     const sentAttributes = variant.attributes ?? [];
     const requiredAttributes = subCategory.attributes.filter(
-      attribute => attribute.required && attribute.appliesToVariant,
+      attribute =>
+        attribute.required &&
+        attribute.appliesTo === AttributeAppliesTo.VARIANT &&
+        attribute.usage !== AttributeUsage.VARIANT_SIZE &&
+        attribute.usage !== AttributeUsage.VARIANT_COLOR,
     );
 
     for (const requiredAttribute of requiredAttributes) {
@@ -204,7 +208,7 @@ export class ProductsService {
 
       if (!attribute) {
         throw new BadRequestException(
-          `El atributo ${item.attributeId} no pertenece a esta subcategoría`,
+          `El atributo ${item.attributeId} no pertenece a esta subcategorÃ­a`,
         );
       }
 
@@ -266,8 +270,11 @@ export class ProductsService {
     });
 
     if (!subCategory) {
-      throw new NotFoundException('Subcategoría no encontrada');
+      throw new NotFoundException('SubcategorÃ­a no encontrada');
     }
+    subCategory.attributes = normalizeSubCategoryAttributesAppliesTo(
+      subCategory.attributes,
+    );
 
     this.validateVariantOptions(subCategory, createProductDto.variants);
 
@@ -282,7 +289,7 @@ export class ProductsService {
       })
         if (!pickupAddress) {
           throw new BadRequestException(
-              'La dirección no existe o no pertenece al usuario',
+              'La direcciÃ³n no existe o no pertenece al usuario',
           );
         }
     }
@@ -349,9 +356,7 @@ export class ProductsService {
     const requiredAttributes = subCategory.attributes.filter(
       attribute =>
         attribute.required &&
-        !attribute.appliesToVariant &&
-        (attribute.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE) ===
-          AttributeUsage.PRODUCT_ATTRIBUTE,
+        attribute.appliesTo === AttributeAppliesTo.PRODUCT,
     );
 
     for (const requiredAttribute of requiredAttributes) {
@@ -374,7 +379,7 @@ export class ProductsService {
 
         if (!attribute) {
           throw new BadRequestException(
-            `El atributo ${item.attributeId} no pertenece a esta subcategoría`,
+            `El atributo ${item.attributeId} no pertenece a esta subcategorÃ­a`,
           );
         }
 
@@ -544,6 +549,9 @@ export class ProductsService {
       if (!product.subCategory) {
         throw new BadRequestException('El producto no tiene subcategoria');
       }
+      product.subCategory.attributes = normalizeSubCategoryAttributesAppliesTo(
+        product.subCategory.attributes,
+      );
 
       this.validateVariantOptions(product.subCategory, variants);
 
@@ -718,3 +726,5 @@ export class ProductsService {
     return this.normalizeProductResponse(products);
   }
 }
+
+

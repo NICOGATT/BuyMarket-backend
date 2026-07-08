@@ -1,10 +1,11 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ObjectLiteral, Repository } from 'typeorm';
 
 import { SubCategory } from '../entities/subcategoria.entity';
 import {
+  AttributeAppliesTo,
   AttributeType,
   AttributeUsage,
   SubCategoryAttribute,
@@ -55,12 +56,13 @@ describe('SubCategoryAttributesService', () => {
     expect(service).toBeDefined();
   });
 
-  it('crea un atributo guardando options y usage', async () => {
+  it('crea un atributo de variante guardando appliesTo, options y usage', async () => {
     const subCategory = { id: 'subcategory-1' } as SubCategory;
     const dto = {
       name: 'Talle',
       type: AttributeType.SELECT,
       required: true,
+      appliesTo: AttributeAppliesTo.VARIANT,
       usage: AttributeUsage.VARIANT_SIZE,
       options: ['S', 'M', 'L'],
       subCategoryId: subCategory.id,
@@ -75,7 +77,8 @@ describe('SubCategoryAttributesService', () => {
       name: dto.name,
       type: dto.type,
       required: true,
-      appliesToVariant: false,
+      appliesTo: AttributeAppliesTo.VARIANT,
+      appliesToVariant: true,
       usage: AttributeUsage.VARIANT_SIZE,
       options: dto.options,
       subCategory,
@@ -83,12 +86,14 @@ describe('SubCategoryAttributesService', () => {
     expect(result).toEqual(
       expect.objectContaining({
         options: dto.options,
+        appliesTo: AttributeAppliesTo.VARIANT,
+        appliesToVariant: true,
         usage: AttributeUsage.VARIANT_SIZE,
       }),
     );
   });
 
-  it('usa product_attribute como usage por defecto', async () => {
+  it('crea un atributo de producto con appliesToVariant en false', async () => {
     const subCategory = { id: 'subcategory-1' } as SubCategory;
 
     subCategoryRepository.findOne?.mockResolvedValue(subCategory);
@@ -96,15 +101,81 @@ describe('SubCategoryAttributesService', () => {
     await service.create({
       name: 'Marca',
       type: AttributeType.TEXT,
+      appliesTo: AttributeAppliesTo.PRODUCT,
       subCategoryId: subCategory.id,
     });
 
     expect(attributeRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
+        appliesTo: AttributeAppliesTo.PRODUCT,
         appliesToVariant: false,
         usage: AttributeUsage.PRODUCT_ATTRIBUTE,
       }),
     );
+  });
+
+  it('usa VARIANT_ATTRIBUTE como usage por defecto para atributos de variante', async () => {
+    const subCategory = { id: 'subcategory-1' } as SubCategory;
+
+    subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+
+    await service.create({
+      name: 'Largo de lomo',
+      type: AttributeType.TEXT,
+      appliesTo: AttributeAppliesTo.VARIANT,
+      subCategoryId: subCategory.id,
+    });
+
+    expect(attributeRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appliesTo: AttributeAppliesTo.VARIANT,
+        appliesToVariant: true,
+        usage: AttributeUsage.VARIANT_ATTRIBUTE,
+      }),
+    );
+  });
+
+  it('rechaza usage de variante para atributos de producto', async () => {
+    await expect(
+      service.create({
+        name: 'Marca',
+        type: AttributeType.TEXT,
+        appliesTo: AttributeAppliesTo.PRODUCT,
+        usage: AttributeUsage.VARIANT_COLOR,
+        subCategoryId: 'subcategory-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(subCategoryRepository.findOne).not.toHaveBeenCalled();
+    expect(attributeRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('rechaza PRODUCT_ATTRIBUTE para atributos de variante', async () => {
+    await expect(
+      service.create({
+        name: 'Largo de lomo',
+        type: AttributeType.TEXT,
+        appliesTo: AttributeAppliesTo.VARIANT,
+        usage: AttributeUsage.PRODUCT_ATTRIBUTE,
+        subCategoryId: 'subcategory-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(subCategoryRepository.findOne).not.toHaveBeenCalled();
+    expect(attributeRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('rechaza crear un atributo sin appliesTo', async () => {
+    await expect(
+      service.create({
+        name: 'Marca',
+        type: AttributeType.TEXT,
+        subCategoryId: 'subcategory-1',
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(subCategoryRepository.findOne).not.toHaveBeenCalled();
+    expect(attributeRepository.create).not.toHaveBeenCalled();
   });
 
   it('lanza NotFoundException si la subcategoria no existe', async () => {
@@ -114,6 +185,7 @@ describe('SubCategoryAttributesService', () => {
       service.create({
         name: 'Marca',
         type: AttributeType.TEXT,
+        appliesTo: AttributeAppliesTo.PRODUCT,
         subCategoryId: 'missing',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);

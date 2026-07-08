@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,13 +8,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import {
+  AttributeAppliesTo,
   AttributeUsage,
   SubCategoryAttribute,
 } from './entities/subcategoria-attribute.entity';
+import {
+  getDefaultUsageForAppliesTo,
+  normalizeSubCategoryAttributeAppliesTo,
+  normalizeSubCategoryAttributesAppliesTo,
+} from './attribute-applies-to.util';
 import { SubCategory } from '../entities/subcategoria.entity';
 
 import { CreateSubCategoryAttributeDto } from './dto/create-subcategoria-attribute.dto';
-import { UpdateSubcategoriaAttributeDto } from './dto/update-subcategoria-attribute.dto'; 
+import { UpdateSubcategoriaAttributeDto } from './dto/update-subcategoria-attribute.dto';
 
 @Injectable()
 export class SubCategoryAttributesService {
@@ -25,34 +32,82 @@ export class SubCategoryAttributesService {
     private readonly subCategoryRepository: Repository<SubCategory>,
   ) {}
 
+  private normalizeAppliesTo(attribute: SubCategoryAttribute) {
+    return normalizeSubCategoryAttributeAppliesTo(attribute);
+  }
+
+  private normalizeAppliesToList(attributes: SubCategoryAttribute[]) {
+    return normalizeSubCategoryAttributesAppliesTo(attributes);
+  }
+
+  private assertAppliesTo(appliesTo?: AttributeAppliesTo) {
+    if (!appliesTo) {
+      throw new BadRequestException('appliesTo es obligatorio');
+    }
+  }
+
+  private getUsage(appliesTo: AttributeAppliesTo, usage?: AttributeUsage) {
+    return usage ?? getDefaultUsageForAppliesTo(appliesTo);
+  }
+
+  private assertUsageMatchesAppliesTo(
+    appliesTo: AttributeAppliesTo,
+    usage: AttributeUsage,
+  ) {
+    if (
+      appliesTo === AttributeAppliesTo.PRODUCT &&
+      usage !== AttributeUsage.PRODUCT_ATTRIBUTE
+    ) {
+      throw new BadRequestException(
+        'Los atributos de producto solo pueden usar PRODUCT_ATTRIBUTE',
+      );
+    }
+
+    if (
+      appliesTo === AttributeAppliesTo.VARIANT &&
+      usage === AttributeUsage.PRODUCT_ATTRIBUTE
+    ) {
+      throw new BadRequestException(
+        'Los atributos de variante no pueden usar PRODUCT_ATTRIBUTE',
+      );
+    }
+  }
+
   async create(dto: CreateSubCategoryAttributeDto) {
+    this.assertAppliesTo(dto.appliesTo);
+    const usage = this.getUsage(dto.appliesTo, dto.usage);
+    this.assertUsageMatchesAppliesTo(dto.appliesTo, usage);
+
     const subCategory = await this.subCategoryRepository.findOne({
       where: { id: dto.subCategoryId },
     });
 
     if (!subCategory) {
-      throw new NotFoundException('Subcategoría no encontrada');
+      throw new NotFoundException('Subcategoria no encontrada');
     }
 
     const attribute = this.attributeRepository.create({
       name: dto.name,
       type: dto.type,
       required: dto.required ?? false,
-      appliesToVariant: dto.appliesToVariant ?? false,
-      usage: dto.usage ?? AttributeUsage.PRODUCT_ATTRIBUTE,
+      appliesTo: dto.appliesTo,
+      appliesToVariant: dto.appliesTo === AttributeAppliesTo.VARIANT,
+      usage,
       options: dto.options,
       subCategory,
     });
 
-    return this.attributeRepository.save(attribute);
+    return this.normalizeAppliesTo(await this.attributeRepository.save(attribute));
   }
 
   async findAll() {
-    return this.attributeRepository.find({
+    const attributes = await this.attributeRepository.find({
       relations: {
         subCategory: true,
       },
     });
+
+    return this.normalizeAppliesToList(attributes);
   }
 
   async findOne(id: string) {
@@ -67,11 +122,11 @@ export class SubCategoryAttributesService {
       throw new NotFoundException('Atributo no encontrado');
     }
 
-    return attribute;
+    return this.normalizeAppliesTo(attribute);
   }
 
   async findBySubCategory(subCategoryId: string) {
-    return this.attributeRepository.find({
+    const attributes = await this.attributeRepository.find({
       where: {
         subCategory: {
           id: subCategoryId,
@@ -81,6 +136,8 @@ export class SubCategoryAttributesService {
         subCategory: true,
       },
     });
+
+    return this.normalizeAppliesToList(attributes);
   }
 
   async update(
@@ -101,13 +158,13 @@ export class SubCategoryAttributesService {
       attribute.required = dto.required;
     }
 
-    if (dto.appliesToVariant !== undefined) {
-      attribute.appliesToVariant = dto.appliesToVariant;
+    if (dto.appliesTo !== undefined) {
+      attribute.appliesTo = dto.appliesTo;
+      attribute.appliesToVariant = dto.appliesTo === AttributeAppliesTo.VARIANT;
     }
 
-    if (dto.usage !== undefined) {
-      attribute.usage = dto.usage;
-    }
+    attribute.usage = this.getUsage(attribute.appliesTo, dto.usage);
+    this.assertUsageMatchesAppliesTo(attribute.appliesTo, attribute.usage);
 
     if (dto.options !== undefined) {
       attribute.options = dto.options;
@@ -119,13 +176,13 @@ export class SubCategoryAttributesService {
       });
 
       if (!subCategory) {
-        throw new NotFoundException('Subcategoría no encontrada');
+        throw new NotFoundException('Subcategoria no encontrada');
       }
 
       attribute.subCategory = subCategory;
     }
 
-    return this.attributeRepository.save(attribute);
+    return this.normalizeAppliesTo(await this.attributeRepository.save(attribute));
   }
 
   async remove(id: string) {

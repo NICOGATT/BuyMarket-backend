@@ -12,6 +12,7 @@ import { Category } from '../categories/entities/category.entity';
 
 import { CreateSubCategoryDto } from './dto/create-subcategoria.dto';
 import { UpdateSubCategoryDto } from './dto/update-subcategoria.dto';
+import { normalizeSubCategoryAttributesAppliesTo } from './subcategoria-attributes/attribute-applies-to.util';
 
 @Injectable()
 export class SubCategoriesService {
@@ -23,6 +24,20 @@ export class SubCategoriesService {
     private readonly categoryRepository: Repository<Category>,
   ) {}
 
+  private normalizeAttributes<T extends SubCategory | SubCategory[]>(subCategories: T): T {
+    const subCategoryList = Array.isArray(subCategories)
+      ? subCategories
+      : [subCategories];
+
+    subCategoryList.forEach(subCategory => {
+      subCategory.attributes = normalizeSubCategoryAttributesAppliesTo(
+        subCategory.attributes,
+      );
+    });
+
+    return subCategories;
+  }
+
   async create(createSubCategoryDto: CreateSubCategoryDto) {
     const category = await this.categoryRepository.findOne({
       where: {
@@ -31,7 +46,7 @@ export class SubCategoriesService {
     });
 
     if (!category) {
-      throw new NotFoundException('Categoría no encontrada');
+      throw new NotFoundException('CategorÃ­a no encontrada');
     }
 
     const subCategory = this.subCategoryRepository.create({
@@ -43,11 +58,14 @@ export class SubCategoriesService {
   }
 
   async findAll() {
-    return this.subCategoryRepository.find({
+    const subCategories = await this.subCategoryRepository.find({
       relations: {
         category: true,
+        attributes: true,
       },
     });
+
+    return this.normalizeAttributes(subCategories);
   }
 
   async findOne(id: string) {
@@ -55,18 +73,19 @@ export class SubCategoriesService {
       where: { id },
       relations: {
         category: true,
+        attributes: true,
       },
     });
 
     if (!subCategory) {
-      throw new NotFoundException('Subcategoría no encontrada');
+      throw new NotFoundException('SubcategorÃ­a no encontrada');
     }
 
-    return subCategory;
+    return this.normalizeAttributes(subCategory);
   }
 
   async findByCategory(categoryId: string) {
-    return this.subCategoryRepository.find({
+    const subCategories = await this.subCategoryRepository.find({
       where: {
         category: {
           id: categoryId,
@@ -74,8 +93,11 @@ export class SubCategoriesService {
       },
       relations: {
         category: true,
+        attributes: true,
       },
     });
+
+    return this.normalizeAttributes(subCategories);
   }
 
   async update(
@@ -96,7 +118,7 @@ export class SubCategoriesService {
       });
 
       if (!category) {
-        throw new NotFoundException('Categoría no encontrada');
+        throw new NotFoundException('CategorÃ­a no encontrada');
       }
 
       subCategory.category = category;
@@ -111,7 +133,7 @@ export class SubCategoriesService {
     await this.subCategoryRepository.remove(subCategory);
 
     return {
-      message: 'Subcategoría eliminada correctamente',
+      message: 'SubcategorÃ­a eliminada correctamente',
     };
   }
 }

@@ -20,9 +20,15 @@ export enum AttributeType {
 }
 
 export enum AttributeUsage {
-  PRODUCT_ATTRIBUTE = 'product_attribute',
-  VARIANT_SIZE = 'variant_size',
-  VARIANT_COLOR = 'variant_color',
+  PRODUCT_ATTRIBUTE = 'PRODUCT_ATTRIBUTE',
+  VARIANT_ATTRIBUTE = 'VARIANT_ATTRIBUTE',
+  VARIANT_SIZE = 'VARIANT_SIZE',
+  VARIANT_COLOR = 'VARIANT_COLOR',
+}
+
+export enum AttributeAppliesTo {
+  PRODUCT = 'PRODUCT',
+  VARIANT = 'VARIANT',
 }
 
 @Entity('sub_category_attributes')
@@ -42,6 +48,13 @@ export class SubCategoryAttribute {
 
   @Column({ default: false })
   required!: boolean;
+
+  @Column({
+    type: 'enum',
+    enum: AttributeAppliesTo,
+    default: AttributeAppliesTo.PRODUCT,
+  })
+  appliesTo!: AttributeAppliesTo;
 
   @Column({ default: false })
   appliesToVariant!: boolean;
@@ -83,3 +96,4 @@ export class SubCategoryAttribute {
   @UpdateDateColumn()
   updatedAt!: Date;
 }
+
