@@ -36,10 +36,7 @@ async function run() {
   await client.connect();
 
   await client.query(`
-    ALTER TYPE sub_category_attributes_usage_enum ADD VALUE IF NOT EXISTS 'PRODUCT_ATTRIBUTE';
-    ALTER TYPE sub_category_attributes_usage_enum ADD VALUE IF NOT EXISTS 'VARIANT_ATTRIBUTE';
-    ALTER TYPE sub_category_attributes_usage_enum ADD VALUE IF NOT EXISTS 'VARIANT_SIZE';
-    ALTER TYPE sub_category_attributes_usage_enum ADD VALUE IF NOT EXISTS 'VARIANT_COLOR';
+    ALTER TYPE sub_category_attributes_usage_enum ADD VALUE IF NOT EXISTS 'variant_attribute';
   `);
 
   const result = await client.query(
@@ -59,15 +56,16 @@ async function run() {
           ELSE FALSE
         END,
         usage = CASE
-          WHEN name = 'Talle' THEN 'VARIANT_SIZE'
-          WHEN name = 'Color' THEN 'VARIANT_COLOR'
-          WHEN name = ANY($2) THEN 'PRODUCT_ATTRIBUTE'
-          WHEN name = ANY($1) THEN 'VARIANT_ATTRIBUTE'
-          WHEN "appliesToVariant" IS TRUE THEN 'VARIANT_ATTRIBUTE'
-          WHEN usage = 'variant_size' THEN 'VARIANT_SIZE'
-          WHEN usage = 'variant_color' THEN 'VARIANT_COLOR'
-          WHEN usage = 'product_attribute' THEN 'PRODUCT_ATTRIBUTE'
-          ELSE COALESCE(usage, 'PRODUCT_ATTRIBUTE')
+          WHEN name = 'Talle' THEN 'variant_size'
+          WHEN name = 'Color' THEN 'variant_color'
+          WHEN name = ANY($2) THEN 'product_attribute'
+          WHEN name = ANY($1) THEN 'variant_attribute'
+          WHEN "appliesToVariant" IS TRUE THEN 'variant_attribute'
+          WHEN usage = 'PRODUCT_ATTRIBUTE' THEN 'product_attribute'
+          WHEN usage = 'VARIANT_ATTRIBUTE' THEN 'variant_attribute'
+          WHEN usage = 'VARIANT_SIZE' THEN 'variant_size'
+          WHEN usage = 'VARIANT_COLOR' THEN 'variant_color'
+          ELSE COALESCE(usage, 'product_attribute')
         END
       WHERE
         "appliesTo" IS NULL
