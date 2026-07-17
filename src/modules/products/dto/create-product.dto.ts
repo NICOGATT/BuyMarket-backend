@@ -7,6 +7,7 @@ import {
   IsPositive,
   IsString,
   IsUUID,
+  Matches,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -30,6 +31,13 @@ class CreateProductVariantDto {
   @IsString()
   @IsOptional()
   color?: string;
+
+  @IsString()
+  @Matches(/^#[0-9a-fA-F]{6}$/, {
+    message: 'colorHex debe tener el formato #RRGGBB',
+  })
+  @IsOptional()
+  colorHex?: string;
 
   @IsNumber()
   @IsPositive()
@@ -61,11 +69,13 @@ export class CreateProductDto {
 
   @IsNumber()
   @IsPositive()
-  price!: number;
+  @IsOptional()
+  price?: number;
 
   @IsNumber()
   @Min(0)
-  stock!: number;
+  @IsOptional()
+  stock?: number;
 
   @IsUUID()
   seller!: string;

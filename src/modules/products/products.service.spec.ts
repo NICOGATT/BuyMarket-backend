@@ -232,6 +232,66 @@ describe('ProductsService', () => {
       expect(result).toEqual(product);
     });
 
+    it('exige precio y stock base cuando no hay variantes', async () => {
+      const { price: _price, stock: _stock, ...dtoWithoutTotals } =
+        createProductDto;
+
+      subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+
+      await expect(service.create(dtoWithoutTotals)).rejects.toThrow(
+        'El precio y el stock son obligatorios cuando el producto no tiene variantes',
+      );
+      expect(productRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('calcula precio y stock base desde las variantes activas', async () => {
+      const { price: _price, stock: _stock, ...dtoWithoutTotals } =
+        createProductDto;
+      const dto: CreateProductDto = {
+        ...dtoWithoutTotals,
+        variants: [
+          { size: 'S', price: 1200, stock: 2 },
+          { size: 'M', price: 1500, stock: 3 },
+          { size: 'L', price: 900, stock: 10, isActive: false },
+        ],
+      };
+
+      subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productRepository.findOne?.mockResolvedValue(product);
+      productVariantRepository.create?.mockImplementation(data => data);
+      productVariantRepository.save?.mockImplementation(data =>
+        Promise.resolve(data),
+      );
+
+      await service.create(dto);
+
+      expect(productRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          price: 1200,
+          stock: 5,
+        }),
+      );
+    });
+
+    it('rechaza variantes cuando ninguna esta activa', async () => {
+      const { price: _price, stock: _stock, ...dtoWithoutTotals } =
+        createProductDto;
+
+      subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+
+      await expect(
+        service.create({
+          ...dtoWithoutTotals,
+          variants: [
+            { size: 'M', price: 1200, stock: 2, isActive: false },
+          ],
+        }),
+      ).rejects.toThrow('El producto debe tener al menos una variante activa');
+      expect(productRepository.create).not.toHaveBeenCalled();
+    });
+
     it('lanza NotFoundException si la subcategoria/categoria no existe', async () => {
       subCategoryRepository.findOne?.mockResolvedValue(null);
 
@@ -461,6 +521,7 @@ describe('ProductsService', () => {
           {
             size: 'M',
             color: 'Negro',
+            colorHex: '#000000',
             price: 1200,
             stock: 2,
           },
@@ -475,6 +536,7 @@ describe('ProductsService', () => {
       expect(productVariantRepository.create).toHaveBeenCalledWith({
         size: 'M',
         color: 'Negro',
+        colorHex: '#000000',
         price: 1200,
         stock: 2,
         isActive: true,
@@ -489,6 +551,7 @@ describe('ProductsService', () => {
           {
             size: 'M',
             color: 'Negro',
+            colorHex: '#000000',
             price: 1200,
             stock: 3,
           },
@@ -503,6 +566,7 @@ describe('ProductsService', () => {
       const variantEntities = dto.variants!.map(variant => ({
         size: variant.size,
         color: variant.color ?? null,
+        colorHex: variant.colorHex ?? null,
         price: variant.price,
         stock: variant.stock,
         isActive: variant.isActive ?? true,
@@ -527,6 +591,7 @@ describe('ProductsService', () => {
       expect(productVariantRepository.create).toHaveBeenCalledWith({
         size: 'M',
         color: 'Negro',
+        colorHex: '#000000',
         price: 1200,
         stock: 3,
         isActive: true,
@@ -537,6 +602,7 @@ describe('ProductsService', () => {
         expect.objectContaining({
           size: 'M',
           color: 'Negro',
+          colorHex: '#000000',
           price: 1200,
           stock: 3,
           isActive: true,
@@ -548,6 +614,7 @@ describe('ProductsService', () => {
         expect.objectContaining({
           size: 'XL',
           color: null,
+          colorHex: null,
           price: 1500,
           stock: 2,
           isActive: false,
@@ -745,6 +812,53 @@ describe('ProductsService', () => {
         },
       });
       expect(result).toEqual(updatedProduct);
+    });
+
+    it('recalcula precio y stock al actualizar variantes', async () => {
+      const productWithSubCategory = {
+        ...product,
+        subCategory,
+      } as Product;
+      const updatedProduct = {
+        ...productWithSubCategory,
+        price: 1300,
+        stock: 6,
+      } as Product;
+      const variants = [
+        { size: 'S', price: 1300, stock: 2 },
+        { size: 'M', price: 1600, stock: 4 },
+        { size: 'L', price: 1000, stock: 8, isActive: false },
+      ];
+
+      productRepository.findOne
+        ?.mockResolvedValueOnce(productWithSubCategory)
+        .mockResolvedValueOnce(updatedProduct);
+      productRepository.update?.mockResolvedValue({ affected: 1 });
+      productVariantRepository.create?.mockImplementation(data => data);
+      productVariantRepository.save?.mockImplementation(data =>
+        Promise.resolve(data),
+      );
+
+      const result = await service.update(productId, { variants });
+
+      expect(productRepository.update).toHaveBeenCalledWith(productId, {
+        price: 1300,
+        stock: 6,
+      });
+      expect(productVariantRepository.delete).toHaveBeenCalledWith({
+        product: { id: productId },
+      });
+      expect(result).toEqual(updatedProduct);
+    });
+
+    it('exige precio y stock al eliminar todas las variantes', async () => {
+      await expect(
+        service.update(productId, { variants: [] }),
+      ).rejects.toThrow(
+        'El precio y el stock son obligatorios cuando el producto no tiene variantes',
+      );
+      expect(productRepository.update).not.toHaveBeenCalled();
+      expect(productVariantRepository.delete).not.toHaveBeenCalled();
     });
 
     it('mapea subCategoryId y no lo envia como propiedad directa de Product', async () => {

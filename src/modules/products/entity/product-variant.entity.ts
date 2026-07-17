@@ -22,6 +22,9 @@ export class ProductVariant {
   @Column({ type: 'varchar', length: 80, nullable: true })
   color?: string | null;
 
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  colorHex?: string | null;
+
   @Column({
     type: 'decimal',
     precision: 10,

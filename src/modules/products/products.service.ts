@@ -257,6 +257,40 @@ export class ProductsService {
     }
   }
 
+  private resolveProductPriceAndStock(
+    price?: number,
+    stock?: number,
+    variants?: CreateProductDto['variants'],
+  ) {
+    if (variants?.length) {
+      const activeVariants = variants.filter(
+        variant => variant.isActive !== false,
+      );
+
+      if (activeVariants.length === 0) {
+        throw new BadRequestException(
+          'El producto debe tener al menos una variante activa',
+        );
+      }
+
+      return {
+        price: Math.min(...activeVariants.map(variant => variant.price)),
+        stock: activeVariants.reduce(
+          (total, variant) => total + variant.stock,
+          0,
+        ),
+      };
+    }
+
+    if (price === undefined || stock === undefined) {
+      throw new BadRequestException(
+        'El precio y el stock son obligatorios cuando el producto no tiene variantes',
+      );
+    }
+
+    return { price, stock };
+  }
+
   async create(createProductDto: CreateProductDto) {
     let pickupAddress : UserAddress | null = null; 
     const subCategory = await this.subCategoryRepository.findOne({
@@ -277,6 +311,11 @@ export class ProductsService {
     );
 
     this.validateVariantOptions(subCategory, createProductDto.variants);
+    const productTotals = this.resolveProductPriceAndStock(
+      createProductDto.price,
+      createProductDto.stock,
+      createProductDto.variants,
+    );
 
     if(createProductDto.pickupAddressId){
       pickupAddress = await this.userAddressRepository.findOne({
@@ -296,8 +335,8 @@ export class ProductsService {
     const product = this.productsRepository.create({
       title: createProductDto.title,
       description: createProductDto.description,
-      price: createProductDto.price,
-      stock: createProductDto.stock,
+      price: productTotals.price,
+      stock: productTotals.stock,
       isActive: false,
       approvalStatus: ProductApprovalStatus.PENDING,
       category: subCategory.category,
@@ -318,6 +357,7 @@ export class ProductsService {
         const variantEntity = this.productVariantRepository.create({
           size: variant.size.trim(),
           color: variant.color?.trim() || null,
+          colorHex: variant.colorHex?.trim() || null,
           price: variant.price,
           stock: variant.stock,
           isActive: variant.isActive ?? true,
@@ -521,19 +561,28 @@ export class ProductsService {
       mediaIds,
       subCategoryId,
       pickupAddressId,
+      price,
+      stock,
       ...rest
     } = updateProductDto;
+    const productTotals = variants === undefined
+      ? {
+          ...(price !== undefined ? { price } : {}),
+          ...(stock !== undefined ? { stock } : {}),
+        }
+      : this.resolveProductPriceAndStock(price, stock, variants);
     const updateData = {
       ...rest,
+      ...productTotals,
       ...(seller ? { seller: { id: seller } } : {}),
       ...(subCategoryId ? { subCategory: { id: subCategoryId } } : {}),
       ...(pickupAddressId ? { pickupAddress: { id: pickupAddressId } } : {}),
     };
 
-    await this.productsRepository.update(id, updateData);
+    let productWithSubCategory: Product | null = null;
 
-    if (variants) {
-      const product = await this.productsRepository.findOne({
+    if (variants !== undefined) {
+      productWithSubCategory = await this.productsRepository.findOne({
         where: { id },
         relations: {
           subCategory: {
@@ -542,18 +591,34 @@ export class ProductsService {
         },
       });
 
-      if (!product) {
+      if (!productWithSubCategory) {
         throw new NotFoundException('Producto no encontrado');
       }
 
-      if (!product.subCategory) {
+      if (!productWithSubCategory.subCategory) {
         throw new BadRequestException('El producto no tiene subcategoria');
       }
-      product.subCategory.attributes = normalizeSubCategoryAttributesAppliesTo(
-        product.subCategory.attributes,
+      productWithSubCategory.subCategory.attributes =
+        normalizeSubCategoryAttributesAppliesTo(
+          productWithSubCategory.subCategory.attributes,
+        );
+
+      this.validateVariantOptions(
+        productWithSubCategory.subCategory,
+        variants,
       );
 
-      this.validateVariantOptions(product.subCategory, variants);
+      for (const variant of variants) {
+        this.validateRequiredVariantAttributes(
+          productWithSubCategory.subCategory,
+          variant,
+        );
+      }
+    }
+
+    await this.productsRepository.update(id, updateData);
+
+    if (variants !== undefined && productWithSubCategory) {
 
       await this.productVariantRepository.delete({
         product: { id },
@@ -561,20 +626,19 @@ export class ProductsService {
 
       if (variants.length > 0) {
         for (const variant of variants) {
-          this.validateRequiredVariantAttributes(product.subCategory, variant);
-
           const nextVariant = this.productVariantRepository.create({
             size: variant.size.trim(),
             color: variant.color?.trim() || null,
+            colorHex: variant.colorHex?.trim() || null,
             price: variant.price,
             stock: variant.stock,
             isActive: variant.isActive ?? true,
-            product,
+            product: productWithSubCategory,
           });
 
           const savedVariant = await this.productVariantRepository.save(nextVariant);
           const attributeValues = this.buildVariantAttributeValues(
-            product.subCategory,
+            productWithSubCategory.subCategory!,
             variant,
             savedVariant,
           );
