@@ -13,6 +13,7 @@ import { Wallet } from '../../wallet/entity/wallet.entity';
 import { Plan } from '../../plan/entities/plan.entity';
 import { UserAddress } from '../../user-address/entities/user-address.entity';
 import { UserPaymentMethod } from '../../user-payment-methods/entities/user-payment-method.entity';
+import { Notification } from '../../notifications/entities/notification.entity';
 
 export enum UserRole {
   USER = 'user',
@@ -28,13 +29,13 @@ export class User {
   @Column({ type: 'varchar', length: 100 })
   firstName!: string;
 
-  @Column({type: 'varchar', length : 100})
-  lastName!: string; 
+  @Column({ type: 'varchar', length: 100 })
+  lastName!: string;
 
   @Column({ type: 'varchar', length: 150, unique: true })
   email!: string;
 
-  @Column({ type: 'varchar', nullable : true })
+  @Column({ type: 'varchar', nullable: true })
   password?: string;
 
   @Column({
@@ -47,35 +48,38 @@ export class User {
   @OneToMany(() => Product, (product) => product.seller)
   products!: Product[];
 
-  @ManyToOne(() => Wallet, wallet => wallet.user)
-  wallet!: Wallet
+  @ManyToOne(() => Wallet, (wallet) => wallet.user)
+  wallet!: Wallet;
 
-  @ManyToOne(() => Plan, plan => plan.users, {
-    nullable : true,
-    eager : true
+  @ManyToOne(() => Plan, (plan) => plan.users, {
+    nullable: true,
+    eager: true,
   })
-  plan! : Plan;
+  plan!: Plan;
 
-  @OneToMany(() => UserAddress, address => address.user)
-  addresses! : UserAddress[]
+  @OneToMany(() => UserAddress, (address) => address.user)
+  addresses!: UserAddress[];
 
-  @OneToMany(() => UserPaymentMethod, paymentMethod => paymentMethod.user)
+  @OneToMany(() => UserPaymentMethod, (paymentMethod) => paymentMethod.user)
   paymentMethods!: UserPaymentMethod[];
 
-  @Column({default : false})
-  isEmailVerified! : boolean; 
+  @OneToMany(() => Notification, (notification) => notification.user)
+  notifications!: Notification[];
 
-  @Column({nullable : true})
-  emailVerificationCode? : string; 
+  @Column({ default: false })
+  isEmailVerified!: boolean;
 
-  @Column({type : 'timestamp', nullable : true})
-  emailVerifcationExpires? : Date;
+  @Column({ nullable: true })
+  emailVerificationCode?: string;
 
-  @Column({nullable : true})
-  googleId?: string; 
+  @Column({ type: 'timestamp', nullable: true })
+  emailVerifcationExpires?: Date;
 
-  @Column({default : 'local'})
-  provider! : 'local' | 'google'; 
+  @Column({ nullable: true })
+  googleId?: string;
+
+  @Column({ default: 'local' })
+  provider!: 'local' | 'google';
 
   @CreateDateColumn()
   createdAt!: Date;

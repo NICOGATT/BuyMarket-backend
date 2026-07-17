@@ -8,14 +8,16 @@ import { WithdrawalRequest } from '../with-drawal-request/entities/with-drawal-r
 import { WalletsController } from './wallet.controller';
 import { WalletService } from './wallet.service';
 import { User } from '../users/entity/user.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Wallet,
       WalletTransaction,
       WithdrawalRequest,
-      User
+      User,
     ]),
+    NotificationsModule,
   ],
   controllers: [WalletsController],
   providers: [WalletService],

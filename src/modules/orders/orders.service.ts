@@ -21,61 +21,69 @@ import {
 import { Payment, PaymentStatus } from '../payments/entity/payment.entity';
 import { ShippingType } from '../shipments/entities/shipment.entity';
 import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
+import {
+  WalletTransaction,
+  WalletTransactionStatus,
+  WalletTransactionType,
+} from '../wallet-transaction/entity/wallet-transaction.entity';
 
 @Injectable()
 export class OrdersService {
-  constructor (
-    @InjectRepository(Order) 
-    private readonly ordersRepository : Repository<Order>,
+  constructor(
+    @InjectRepository(Order)
+    private readonly ordersRepository: Repository<Order>,
 
     @InjectRepository(OrderItem)
-    private readonly orderItemsRepository : Repository<OrderItem>, 
+    private readonly orderItemsRepository: Repository<OrderItem>,
 
     @InjectRepository(Cart)
-    private readonly cartsRepository : Repository<Cart>,
+    private readonly cartsRepository: Repository<Cart>,
 
     @InjectRepository(CartItem)
-    private readonly cartItemsRepository : Repository<CartItem>, 
+    private readonly cartItemsRepository: Repository<CartItem>,
 
     @InjectRepository(Product)
-    private readonly productsRepository : Repository<Product>, 
+    private readonly productsRepository: Repository<Product>,
 
     @InjectRepository(ProductVariant)
-    private readonly productVariantsRepository : Repository<ProductVariant>,
+    private readonly productVariantsRepository: Repository<ProductVariant>,
 
     @InjectRepository(User)
-    private readonly userRepository : Repository<User>,
+    private readonly userRepository: Repository<User>,
 
     @InjectRepository(Payment)
-    private readonly paymentRepository : Repository<Payment>,
+    private readonly paymentRepository: Repository<Payment>,
 
     @InjectRepository(UserPaymentMethod)
-    private readonly userPaymentMethodsRepository : Repository<UserPaymentMethod>,
+    private readonly userPaymentMethodsRepository: Repository<UserPaymentMethod>,
+
+    @InjectRepository(WalletTransaction)
+    private readonly walletTransactionsRepository: Repository<WalletTransaction>,
 
     private readonly configService: ConfigService,
-  ){}
+  ) {}
 
-  async checkout (userId : string, checkoutDto : CheckoutOrderDto){
+  async checkout(userId: string, checkoutDto: CheckoutOrderDto) {
     const user = await this.userRepository.findOne({
-      where : {id : userId}
-    })
+      where: { id: userId },
+    });
 
-    if(!user) {
-      throw new NotFoundException("Usuario no encotrado")
+    if (!user) {
+      throw new NotFoundException('Usuario no encotrado');
     }
 
     const cart = await this.cartsRepository.findOne({
-      where : {
-        user : {id : userId}
-      }, 
-      relations : ['items', 'items.product', 'items.variant']
-    })
+      where: {
+        user: { id: userId },
+      },
+      relations: ['items', 'items.product', 'items.variant'],
+    });
 
-    if(!cart || !cart.items || cart.items.length === 0){
-      throw new BadRequestException("El carrito esta vacio")
+    if (!cart || !cart.items || cart.items.length === 0) {
+      throw new BadRequestException('El carrito esta vacio');
     }
 
-    let total = 0; 
+    let total = 0;
 
     for (const item of cart.items) {
       const availableStock = item.variant?.stock ?? item.product.stock;
@@ -89,11 +97,11 @@ export class OrdersService {
             .join(' ')
         : item.product.title;
 
-      if(availableStock < item.quantity) {
+      if (availableStock < item.quantity) {
         throw new BadRequestException(`Stock insuficiente para ${itemName}`);
       }
 
-      total += Number(item.unitPrice) * item.quantity; 
+      total += Number(item.unitPrice) * item.quantity;
     }
 
     const selectedPaymentMethod = await this.resolvePaymentMethod(
@@ -101,19 +109,21 @@ export class OrdersService {
       checkoutDto,
     );
 
-    const shippingType = checkoutDto.shippingType ?? ShippingType.LOCAL_DELIVERY;
+    const shippingType =
+      checkoutDto.shippingType ?? ShippingType.LOCAL_DELIVERY;
     const nationalShippingData =
       shippingType === ShippingType.NATIONAL_SHIPPING
         ? this.normalizeNationalShippingData(checkoutDto.nationalShippingData)
         : undefined;
 
     const order = this.ordersRepository.create({
-      buyer : user, 
-      total, 
-      status : OrderStatus.PENDING,
-      deliveryAddress : nationalShippingData?.address ?? checkoutDto.deliveryAddress!,
+      buyer: user,
+      total,
+      status: OrderStatus.PENDING,
+      deliveryAddress:
+        nationalShippingData?.address ?? checkoutDto.deliveryAddress!,
       shippingType,
-      paymentMethod : selectedPaymentMethod.method,
+      paymentMethod: selectedPaymentMethod.method,
       notes: checkoutDto.notes,
       nationalShippingFullName: nationalShippingData?.fullName,
       nationalShippingDni: nationalShippingData?.dni,
@@ -126,24 +136,24 @@ export class OrdersService {
       nationalShippingPhone: nationalShippingData?.phone,
       nationalShippingEmail: nationalShippingData?.email,
       nationalShippingTransportName: nationalShippingData?.transportName,
-    })
+    });
 
-    const savedOrder = await this.ordersRepository.save(order); 
+    const savedOrder = await this.ordersRepository.save(order);
 
-    const orderItems = cart.items.map((item) => 
+    const orderItems = cart.items.map((item) =>
       this.orderItemsRepository.create({
-        order : savedOrder, 
-        product : item.product, 
-        variant : item.variant ?? null,
-        quantity : item.quantity, 
-        unitPrice : item.unitPrice, 
-        subtotal : Number(item.unitPrice) * item.quantity
-      })
-    )
+        order: savedOrder,
+        product: item.product,
+        variant: item.variant ?? null,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        subtotal: Number(item.unitPrice) * item.quantity,
+      }),
+    );
 
-    await this.orderItemsRepository.save(orderItems); 
+    await this.orderItemsRepository.save(orderItems);
 
-    for (const item of cart.items){
+    for (const item of cart.items) {
       if (item.variant) {
         item.variant.stock -= item.quantity;
 
@@ -156,7 +166,7 @@ export class OrdersService {
     }
 
     await this.cartItemsRepository.delete({
-      cart : {id : cart.id},
+      cart: { id: cart.id },
     });
 
     if (selectedPaymentMethod.method === PaymentMethod.TRANSFER) {
@@ -184,19 +194,26 @@ export class OrdersService {
       };
     }
 
-    return this.findOne(savedOrder.id, userId); 
+    return this.findOne(savedOrder.id, userId);
   }
 
-  async findMyOrders(userId:string) {
+  async findMyOrders(userId: string) {
     return this.ordersRepository.find({
-      where : {
-        buyer : {id : userId}
-      }, 
-      relations : ['buyer', 'items', 'items.product', 'items.variant', 'payment', 'shipment'],
-      order : {
-        createdAt : 'DESC'
-      }
-    })
+      where: {
+        buyer: { id: userId },
+      },
+      relations: [
+        'buyer',
+        'items',
+        'items.product',
+        'items.variant',
+        'payment',
+        'shipment',
+      ],
+      order: {
+        createdAt: 'DESC',
+      },
+    });
   }
 
   async findMySales(userId: string) {
@@ -228,35 +245,143 @@ export class OrdersService {
       },
     });
 
-    return sales.map((sale) => ({
-      saleId: sale.id,
-      orderItemId: sale.id,
-      orderId: sale.order.id,
-      product: {
-        id: sale.product.id,
-        title: sale.product.title,
-        media: sale.product.media ?? [],
-      },
-      variant: sale.variant
-        ? {
-            id: sale.variant.id,
-            size: sale.variant.size,
-            color: sale.variant.color ?? null,
-          }
-        : null,
-      buyer: {
-        id: sale.order.buyer.id,
-        firstName: sale.order.buyer.firstName,
-        lastName: sale.order.buyer.lastName,
-      },
-      quantity: sale.quantity,
-      unitPrice: Number(sale.unitPrice),
-      subtotal: Number(sale.subtotal),
-      orderStatus: sale.order.status,
-      paymentMethod: sale.order.paymentMethod,
-      shippingType: sale.order.shippingType,
-      createdAt: sale.order.createdAt,
-    }));
+    const orderIds = [...new Set(sales.map((sale) => sale.order.id))];
+    const transactions =
+      orderIds.length === 0
+        ? []
+        : await this.walletTransactionsRepository.find({
+            where: {
+              wallet: { user: { id: userId } },
+              order: { id: In(orderIds) },
+              type: WalletTransactionType.CREDIT,
+            },
+            relations: {
+              order: true,
+              wallet: { user: true },
+            },
+          });
+    const transactionByOrder = new Map(
+      transactions.map((transaction) => [transaction.order?.id, transaction]),
+    );
+    const salesByOrder = new Map<string, OrderItem[]>();
+
+    for (const sale of sales) {
+      const orderSales = salesByOrder.get(sale.order.id) ?? [];
+      orderSales.push(sale);
+      salesByOrder.set(sale.order.id, orderSales);
+    }
+
+    const allocations = new Map<
+      string,
+      {
+        grossAmount: number;
+        commissionAmount: number;
+        netAmount: number;
+        walletStatus: WalletTransactionStatus | 'unavailable';
+        effectiveAt: Date | null;
+      }
+    >();
+
+    for (const [orderId, orderSales] of salesByOrder) {
+      const transaction = transactionByOrder.get(orderId);
+      const fallbackGross = orderSales.reduce(
+        (total, sale) => total + Number(sale.subtotal),
+        0,
+      );
+      const grossCents = this.toCents(transaction?.amount ?? fallbackGross);
+      const commissionCents = this.toCents(transaction?.commissionAmount ?? 0);
+      const netCents = this.toCents(transaction?.netAmount ?? fallbackGross);
+      const weights = orderSales.map((sale) => Number(sale.subtotal));
+      const allocatedGross = this.allocateCents(grossCents, weights);
+      const allocatedCommission = this.allocateCents(commissionCents, weights);
+      const allocatedNet = this.allocateCents(netCents, weights);
+
+      orderSales.forEach((sale, index) => {
+        allocations.set(sale.id, {
+          grossAmount: allocatedGross[index] / 100,
+          commissionAmount: allocatedCommission[index] / 100,
+          netAmount: allocatedNet[index] / 100,
+          walletStatus: transaction?.status ?? 'unavailable',
+          effectiveAt:
+            transaction?.effectiveAt ??
+            (transaction?.status === WalletTransactionStatus.COMPLETED
+              ? transaction.createdAt
+              : null),
+        });
+      });
+    }
+
+    return sales.map((sale) => {
+      const financial = allocations.get(sale.id)!;
+
+      return {
+        saleId: sale.id,
+        orderItemId: sale.id,
+        orderId: sale.order.id,
+        product: {
+          id: sale.product.id,
+          title: sale.product.title,
+          media: sale.product.media ?? [],
+        },
+        variant: sale.variant
+          ? {
+              id: sale.variant.id,
+              size: sale.variant.size,
+              color: sale.variant.color ?? null,
+            }
+          : null,
+        buyer: {
+          id: sale.order.buyer.id,
+          firstName: sale.order.buyer.firstName,
+          lastName: sale.order.buyer.lastName,
+        },
+        quantity: sale.quantity,
+        unitPrice: Number(sale.unitPrice),
+        subtotal: Number(sale.subtotal),
+        orderStatus: sale.order.status,
+        paymentMethod: sale.order.paymentMethod,
+        shippingType: sale.order.shippingType,
+        createdAt: sale.order.createdAt,
+        financial: {
+          grossAmount: financial.grossAmount,
+          deductions:
+            financial.commissionAmount > 0
+              ? [
+                  {
+                    code: 'commission',
+                    label: 'Comisión BuyMarket',
+                    amount: financial.commissionAmount,
+                  },
+                ]
+              : [],
+          netAmount: financial.netAmount,
+          walletStatus: financial.walletStatus,
+          effectiveAt: financial.effectiveAt,
+        },
+      };
+    });
+  }
+
+  private toCents(value: number | string) {
+    return Math.round(Number(value) * 100);
+  }
+
+  private allocateCents(totalCents: number, weights: number[]) {
+    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+    if (weights.length === 0) return [];
+    if (totalWeight <= 0) {
+      return weights.map((_, index) =>
+        index === weights.length - 1 ? totalCents : 0,
+      );
+    }
+
+    let allocated = 0;
+    return weights.map((weight, index) => {
+      if (index === weights.length - 1) return totalCents - allocated;
+      const share = Math.round(totalCents * (weight / totalWeight));
+      allocated += share;
+      return share;
+    });
   }
 
   async findOne(id: string, userId: string) {
@@ -265,7 +390,14 @@ export class OrdersService {
         id,
         buyer: { id: userId },
       },
-      relations: ['buyer', 'items', 'items.product', 'items.variant', 'payment', 'shipment'],
+      relations: [
+        'buyer',
+        'items',
+        'items.product',
+        'items.variant',
+        'payment',
+        'shipment',
+      ],
     });
 
     if (!order) {

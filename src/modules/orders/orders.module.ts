@@ -13,6 +13,7 @@ import { ProductVariant } from '../products/entity/product-variant.entity';
 import { User } from '../users/entity/user.entity';
 import { Payment } from '../payments/entity/payment.entity';
 import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment-method.entity';
+import { WalletTransaction } from '../wallet-transaction/entity/wallet-transaction.entity';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { UserPaymentMethod } from '../user-payment-methods/entities/user-payment
       User,
       Payment,
       UserPaymentMethod,
+      WalletTransaction,
     ]),
   ],
   controllers: [OrdersController],

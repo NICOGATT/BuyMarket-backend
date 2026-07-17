@@ -12,12 +12,15 @@ import {
   WithdrawalStatus,
 } from './entities/with-drawal-request.entity';
 import { WithDrawalRequestService } from './with-drawal-request.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
 >;
 
-const createMockRepository = <T extends ObjectLiteral = ObjectLiteral>(): MockRepository<T> => ({
+const createMockRepository = <
+  T extends ObjectLiteral = ObjectLiteral,
+>(): MockRepository<T> => ({
   create: jest.fn(),
   find: jest.fn(),
   findOne: jest.fn(),
@@ -28,6 +31,7 @@ describe('WithDrawalRequestService', () => {
   let service: WithDrawalRequestService;
   let walletsRepository: MockRepository<Wallet>;
   let withdrawalsRepository: MockRepository<WithdrawalRequest>;
+  let notificationsService: { createOnce: jest.Mock };
 
   const userId = 'bdb0526e-0ee2-473d-8daa-a6e63c811f8f';
   const walletId = '73005f56-0681-4a72-b607-474165d73396';
@@ -76,6 +80,9 @@ describe('WithDrawalRequestService', () => {
   beforeEach(async () => {
     walletsRepository = createMockRepository<Wallet>();
     withdrawalsRepository = createMockRepository<WithdrawalRequest>();
+    notificationsService = {
+      createOnce: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -87,6 +94,10 @@ describe('WithDrawalRequestService', () => {
         {
           provide: getRepositoryToken(WithdrawalRequest),
           useValue: withdrawalsRepository,
+        },
+        {
+          provide: NotificationsService,
+          useValue: notificationsService,
         },
       ],
     }).compile();
@@ -332,7 +343,9 @@ describe('WithDrawalRequestService', () => {
       expect(withdrawalsRepository.findOne).toHaveBeenCalledWith({
         where: { id: withdrawalId },
         relations: {
-          wallet: true,
+          wallet: {
+            user: true,
+          },
         },
       });
       expect(walletForWithdrawal.pendingBalance).toBe(0);
@@ -343,6 +356,13 @@ describe('WithDrawalRequestService', () => {
         adminNote: dto.adminNote,
       });
       expect(result).toEqual(paidWithdrawal);
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId,
+          type: 'WITHDRAWAL_PAID',
+          data: expect.objectContaining({ withdrawalId }),
+        }),
+      );
     });
 
     it('rechaza una solicitud, devuelve saldo retenido y guarda la wallet', async () => {
@@ -379,6 +399,13 @@ describe('WithDrawalRequestService', () => {
         adminNote: dto.adminNote,
       });
       expect(result).toEqual(rejectedWithdrawal);
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId,
+          type: 'WITHDRAWAL_REJECTED',
+          data: expect.objectContaining({ withdrawalId }),
+        }),
+      );
     });
 
     it('lanza NotFoundException si la solicitud no existe', async () => {

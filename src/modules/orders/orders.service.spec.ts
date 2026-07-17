@@ -14,10 +14,19 @@ import { User } from '../users/entity/user.entity';
 import { Order, OrderStatus, PaymentMethod } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrdersService } from './orders.service';
+import {
+  WalletTransaction,
+  WalletTransactionStatus,
+  WalletTransactionType,
+} from '../wallet-transaction/entity/wallet-transaction.entity';
 
-type MockRepository<T extends ObjectLiteral = any> = Partial<Record<keyof Repository<T>, jest.Mock>>;
+type MockRepository<T extends ObjectLiteral = any> = Partial<
+  Record<keyof Repository<T>, jest.Mock>
+>;
 
-const createMockRepository = <T extends ObjectLiteral = any>(): MockRepository<T> => ({
+const createMockRepository = <
+  T extends ObjectLiteral = any,
+>(): MockRepository<T> => ({
   create: jest.fn((data) => data),
   delete: jest.fn(),
   find: jest.fn(),
@@ -36,6 +45,7 @@ describe('OrdersService', () => {
   let usersRepository: MockRepository<User>;
   let paymentsRepository: MockRepository<Payment>;
   let userPaymentMethodsRepository: MockRepository<UserPaymentMethod>;
+  let walletTransactionsRepository: MockRepository<WalletTransaction>;
 
   beforeEach(async () => {
     ordersRepository = createMockRepository<Order>();
@@ -47,6 +57,7 @@ describe('OrdersService', () => {
     usersRepository = createMockRepository<User>();
     paymentsRepository = createMockRepository<Payment>();
     userPaymentMethodsRepository = createMockRepository<UserPaymentMethod>();
+    walletTransactionsRepository = createMockRepository<WalletTransaction>();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -86,6 +97,10 @@ describe('OrdersService', () => {
         {
           provide: getRepositoryToken(UserPaymentMethod),
           useValue: userPaymentMethodsRepository,
+        },
+        {
+          provide: getRepositoryToken(WalletTransaction),
+          useValue: walletTransactionsRepository,
         },
         {
           provide: ConfigService,
@@ -569,6 +584,28 @@ describe('OrdersService', () => {
     } as unknown as OrderItem;
 
     orderItemsRepository.find?.mockResolvedValue([paidSale, deliveredSale]);
+    walletTransactionsRepository.find?.mockResolvedValue([
+      {
+        id: 'transaction-1',
+        order: { id: 'order-1' },
+        type: WalletTransactionType.CREDIT,
+        amount: 3000,
+        commissionAmount: 300,
+        netAmount: 2700,
+        status: WalletTransactionStatus.COMPLETED,
+        createdAt,
+      },
+      {
+        id: 'transaction-2',
+        order: { id: 'order-2' },
+        type: WalletTransactionType.CREDIT,
+        amount: 3000,
+        commissionAmount: 300,
+        netAmount: 2700,
+        status: WalletTransactionStatus.PENDING,
+        createdAt,
+      },
+    ]);
 
     const result = await service.findMySales(seller.id);
 
@@ -630,6 +667,19 @@ describe('OrdersService', () => {
         paymentMethod: PaymentMethod.TRANSFER,
         shippingType: ShippingType.LOCAL_DELIVERY,
         createdAt,
+        financial: {
+          grossAmount: 3000,
+          deductions: [
+            {
+              code: 'commission',
+              label: 'Comisión BuyMarket',
+              amount: 300,
+            },
+          ],
+          netAmount: 2700,
+          walletStatus: WalletTransactionStatus.COMPLETED,
+          effectiveAt: createdAt,
+        },
       },
       {
         saleId: 'item-2',
@@ -657,9 +707,86 @@ describe('OrdersService', () => {
         paymentMethod: PaymentMethod.TRANSFER,
         shippingType: ShippingType.LOCAL_DELIVERY,
         createdAt,
+        financial: {
+          grossAmount: 3000,
+          deductions: [
+            {
+              code: 'commission',
+              label: 'Comisión BuyMarket',
+              amount: 300,
+            },
+          ],
+          netAmount: 2700,
+          walletStatus: WalletTransactionStatus.PENDING,
+          effectiveAt: null,
+        },
       },
     ]);
     expect(JSON.stringify(result)).not.toContain('buyer-secret');
     expect(JSON.stringify(result)).not.toContain('seller-secret');
+  });
+
+  it('reparte importes financieros por producto y conserva los centavos', async () => {
+    const createdAt = new Date('2026-07-10T10:00:00.000Z');
+    const order = {
+      id: 'order-shared',
+      buyer: { id: 'buyer-1', firstName: 'Ana', lastName: 'Perez' },
+      status: OrderStatus.PAID,
+      paymentMethod: PaymentMethod.TRANSFER,
+      shippingType: ShippingType.LOCAL_DELIVERY,
+      createdAt,
+    };
+    const product = {
+      id: 'product-1',
+      title: 'Producto',
+      media: [],
+      seller: { id: 'seller-1' },
+    };
+    orderItemsRepository.find?.mockResolvedValue([
+      {
+        id: 'item-1',
+        order,
+        product,
+        variant: null,
+        quantity: 1,
+        unitPrice: 1,
+        subtotal: 1,
+      },
+      {
+        id: 'item-2',
+        order,
+        product,
+        variant: null,
+        quantity: 1,
+        unitPrice: 2,
+        subtotal: 2,
+      },
+    ] as unknown as OrderItem[]);
+    walletTransactionsRepository.find?.mockResolvedValue([
+      {
+        order: { id: order.id },
+        type: WalletTransactionType.CREDIT,
+        amount: 100,
+        commissionAmount: 10,
+        netAmount: 90,
+        status: WalletTransactionStatus.COMPLETED,
+        createdAt,
+      },
+    ] as WalletTransaction[]);
+
+    const result = await service.findMySales('seller-1');
+
+    expect(result.map((sale) => sale.financial)).toEqual([
+      expect.objectContaining({
+        grossAmount: 33.33,
+        netAmount: 30,
+        deductions: [expect.objectContaining({ amount: 3.33 })],
+      }),
+      expect.objectContaining({
+        grossAmount: 66.67,
+        netAmount: 60,
+        deductions: [expect.objectContaining({ amount: 6.67 })],
+      }),
+    ]);
   });
 });

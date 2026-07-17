@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
@@ -23,11 +24,14 @@ export enum WalletTransactionStatus {
 }
 
 @Entity('wallet_transactions')
+@Index('UQ_wallet_transaction_order_type', ['wallet', 'order', 'type'], {
+  unique: true,
+})
 export class WalletTransaction {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @ManyToOne(() => Wallet, wallet => wallet.transactions, {
+  @ManyToOne(() => Wallet, (wallet) => wallet.transactions, {
     onDelete: 'CASCADE',
   })
   wallet!: Wallet;
@@ -74,11 +78,14 @@ export class WalletTransaction {
   })
   status!: WalletTransactionStatus;
 
-  @Column({type : "timestamp", nullable : true})
-  releaseDate? : Date | null; 
+  @Column({ type: 'timestamp', nullable: true })
+  releaseDate?: Date | null;
 
-  @Column({type : "varchar", nullable : true})
-  mercadoPagoPaymentId? : string | null; 
+  @Column({ type: 'timestamp', nullable: true })
+  effectiveAt?: Date | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  mercadoPagoPaymentId?: string | null;
 
   @CreateDateColumn()
   createdAt!: Date;

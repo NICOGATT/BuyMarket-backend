@@ -4,10 +4,19 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ObjectLiteral, Repository } from 'typeorm';
 
-import { Order, OrderStatus, PaymentMethod } from '../orders/entities/order.entity';
+import {
+  Order,
+  OrderStatus,
+  PaymentMethod,
+} from '../orders/entities/order.entity';
 import { WalletService } from '../wallet/wallet.service';
-import { Payment as PaymentEntity, PaymentStatus } from './entity/payment.entity';
+import {
+  Payment as PaymentEntity,
+  PaymentStatus,
+} from './entity/payment.entity';
 import { PaymentsService } from './payments.service';
+import { CloudinaryService } from '../../cloudinary/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const mockPreferenceCreate = jest.fn();
 const mockPaymentGet = jest.fn();
@@ -26,7 +35,9 @@ type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
 >;
 
-const createMockRepository = <T extends ObjectLiteral = ObjectLiteral>(): MockRepository<T> => ({
+const createMockRepository = <
+  T extends ObjectLiteral = ObjectLiteral,
+>(): MockRepository<T> => ({
   findOne: jest.fn(),
   save: jest.fn(),
 });
@@ -36,6 +47,10 @@ describe('PaymentsService', () => {
   let orderRepository: MockRepository<Order>;
   let paymentRepository: MockRepository<PaymentEntity>;
   let walletService: jest.Mocked<Pick<WalletService, 'creditFromOrder'>>;
+  let notificationsService: {
+    createOnce: jest.Mock;
+    createManyOnce: jest.Mock;
+  };
 
   const buyerId = 'bdb0526e-0ee2-473d-8daa-a6e63c811f8f';
   const orderId = '559b0806-5ec7-4669-b512-370136e57b8b';
@@ -106,6 +121,10 @@ describe('PaymentsService', () => {
     walletService = {
       creditFromOrder: jest.fn(),
     };
+    notificationsService = {
+      createOnce: jest.fn().mockResolvedValue(undefined),
+      createManyOnce: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -138,6 +157,14 @@ describe('PaymentsService', () => {
           provide: WalletService,
           useValue: walletService,
         },
+        {
+          provide: CloudinaryService,
+          useValue: { uploadFile: jest.fn() },
+        },
+        {
+          provide: NotificationsService,
+          useValue: notificationsService,
+        },
       ],
     }).compile();
 
@@ -163,7 +190,10 @@ describe('PaymentsService', () => {
         sandbox_init_point: 'https://sandbox.mp.com/init',
       });
 
-      const result = await service.createMercadoPagoPreference(orderId, buyerId);
+      const result = await service.createMercadoPagoPreference(
+        orderId,
+        buyerId,
+      );
 
       expect(orderRepository.findOne).toHaveBeenCalledWith({
         where: {
@@ -196,8 +226,7 @@ describe('PaymentsService', () => {
             name: buyer.firstName,
             surname: buyer.lastName,
           },
-          notification_url:
-            'https://api.test.com/payments/mercadopago/webhook',
+          notification_url: 'https://api.test.com/payments/mercadopago/webhook',
           back_urls: {
             success: 'https://front.test.com/success',
             failure: 'https://front.test.com/failure',
@@ -295,7 +324,7 @@ describe('PaymentsService', () => {
 
       expect(orderRepository.findOne).toHaveBeenCalledWith({
         where: { id: orderId },
-        relations: ['items', 'items.product', 'items.product.seller'],
+        relations: ['buyer', 'items', 'items.product', 'items.product.seller'],
       });
       expect(result).toEqual({ received: true });
       expect(orderRepository.save).not.toHaveBeenCalled();
@@ -334,6 +363,23 @@ describe('PaymentsService', () => {
         amount: 500,
         commisionPercentage: 5,
       });
+      expect(notificationsService.createManyOnce).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            userId: sellerId,
+            type: 'NEW_SALE',
+          }),
+          expect.objectContaining({
+            userId: sellerId,
+            type: 'BALANCE_AVAILABLE',
+            data: expect.objectContaining({ netAmount: 900 }),
+          }),
+          expect.objectContaining({
+            userId: buyerId,
+            type: 'PAYMENT_APPROVED',
+          }),
+        ]),
+      );
       expect(result).toEqual({ received: true });
     });
 
@@ -347,14 +393,17 @@ describe('PaymentsService', () => {
       orderRepository.findOne?.mockResolvedValue(order);
       orderRepository.save?.mockResolvedValue(order);
 
-      const result = await service.handleMercadoPagoWebhook(
-        {},
-        { id: '123' },
-      );
+      const result = await service.handleMercadoPagoWebhook({}, { id: '123' });
 
       expect(order.status).toBe(OrderStatus.REJECTED);
       expect(order.paymentStatus).toBe('rejected');
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: buyerId,
+          type: 'PAYMENT_REJECTED',
+        }),
+      );
       expect(result).toEqual({ received: true });
     });
 
@@ -508,7 +557,7 @@ describe('PaymentsService', () => {
       });
     });
 
-    it('no permite procesar dos veces una transferencia', async () => {
+    it('reintenta una transferencia completada sin volver a acreditar', async () => {
       const order = createTransferOrder(PaymentStatus.COMPLETED);
       order.status = OrderStatus.PAID;
       orderRepository.findOne?.mockResolvedValue(order);
@@ -517,8 +566,14 @@ describe('PaymentsService', () => {
         service.updateTransferPaymentStatus(orderId, {
           status: PaymentStatus.COMPLETED,
         }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).resolves.toEqual({
+        orderId,
+        orderStatus: OrderStatus.PAID,
+        paymentStatus: PaymentStatus.COMPLETED,
+        message: 'Pago confirmado, estamos asignando a un repartidor',
+      });
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+      expect(notificationsService.createManyOnce).toHaveBeenCalled();
     });
   });
 });

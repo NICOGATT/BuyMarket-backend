@@ -24,9 +24,10 @@ import { WithdrawalRequestsModule } from './modules/with-drawal-request/with-dra
 import { UserAddressesModule } from './modules/user-address/user-address.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
 import { WalletMovementModule } from './modules/wallet-movement/wallet-movement.module';
-import { ShipmentsModule } from './modules/shipments/shipments.module'; 
-import { MailModule } from './modules/mail/mail.module'; 
+import { ShipmentsModule } from './modules/shipments/shipments.module';
+import { MailModule } from './modules/mail/mail.module';
 import { UserPaymentMethodsModule } from './modules/user-payment-methods/user-payment-methods.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -47,10 +48,10 @@ import { UserPaymentMethodsModule } from './modules/user-payment-methods/user-pa
         database: config.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
         synchronize: true,
-        ssl : 
+        ssl:
           config.get<string>('NODE_ENV') === 'production'
-            ? {rejectUnauthorized : false}
-            : false, 
+            ? { rejectUnauthorized: false }
+            : false,
       }),
     }),
 
@@ -76,6 +77,7 @@ import { UserPaymentMethodsModule } from './modules/user-payment-methods/user-pa
     ShipmentsModule,
     MailModule,
     UserPaymentMethodsModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

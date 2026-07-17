@@ -15,6 +15,8 @@ import {
 import { UserRole } from '../users/entity/user.entity';
 import { Wallet } from './entity/wallet.entity';
 import { WalletService } from './wallet.service';
+import { User } from '../users/entity/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 type MockRepository<T = unknown> = Partial<
   Record<keyof Repository<T>, jest.Mock>
@@ -32,6 +34,7 @@ describe('WalletService', () => {
   let walletsRepository: MockRepository<Wallet>;
   let transactionRepository: MockRepository<WalletTransaction>;
   let withdrawalsRepository: MockRepository<WithdrawalRequest>;
+  let notificationsService: { createOnce: jest.Mock };
 
   const userId = 'bdb0526e-0ee2-473d-8daa-a6e63c811f8f';
   const walletId = '73005f56-0681-4a72-b607-474165d73396';
@@ -66,6 +69,9 @@ describe('WalletService', () => {
     walletsRepository = createMockRepository<Wallet>();
     transactionRepository = createMockRepository<WalletTransaction>();
     withdrawalsRepository = createMockRepository<WithdrawalRequest>();
+    notificationsService = {
+      createOnce: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,6 +87,14 @@ describe('WalletService', () => {
         {
           provide: getRepositoryToken(WithdrawalRequest),
           useValue: withdrawalsRepository,
+        },
+        {
+          provide: getRepositoryToken(User),
+          useValue: createMockRepository<User>(),
+        },
+        {
+          provide: NotificationsService,
+          useValue: notificationsService,
         },
       ],
     }).compile();
@@ -232,6 +246,7 @@ describe('WalletService', () => {
         commissionAmount: 100,
         netAmount: 900,
         status: WalletTransactionStatus.COMPLETED,
+        effectiveAt: expect.any(Date),
       });
       expect(transactionRepository.save).toHaveBeenCalledWith(
         createdTransaction,
@@ -240,6 +255,70 @@ describe('WalletService', () => {
         wallet: walletToCredit,
         transaction: createdTransaction,
       });
+    });
+  });
+
+  describe('findMyEarnings', () => {
+    it('suma creditos y resta ajustes sin contar retiros', async () => {
+      walletsRepository.findOne?.mockResolvedValue(wallet);
+      transactionRepository.find?.mockResolvedValue([
+        {
+          type: WalletTransactionType.CREDIT,
+          netAmount: 900,
+          amount: 1000,
+          status: WalletTransactionStatus.COMPLETED,
+          effectiveAt: new Date('2026-07-05T12:00:00.000Z'),
+          createdAt: new Date('2026-07-01T12:00:00.000Z'),
+        },
+        {
+          type: WalletTransactionType.REFUND,
+          netAmount: 100,
+          amount: 100,
+          status: WalletTransactionStatus.COMPLETED,
+          createdAt: new Date('2026-07-06T12:00:00.000Z'),
+        },
+        {
+          type: WalletTransactionType.WITHDRAWAL,
+          netAmount: 500,
+          amount: 500,
+          status: WalletTransactionStatus.COMPLETED,
+          createdAt: new Date('2026-07-07T12:00:00.000Z'),
+        },
+        {
+          type: WalletTransactionType.COMMISSION,
+          netAmount: 0,
+          amount: 100,
+          status: WalletTransactionStatus.COMPLETED,
+          createdAt: new Date('2026-07-08T12:00:00.000Z'),
+        },
+        {
+          type: WalletTransactionType.CREDIT,
+          netAmount: 300,
+          amount: 300,
+          status: WalletTransactionStatus.COMPLETED,
+          createdAt: new Date('2026-08-01T00:00:00.000Z'),
+        },
+      ] as WalletTransaction[]);
+
+      const result = await service.findMyEarnings(
+        userId,
+        '2026-07-01T00:00:00.000Z',
+        '2026-08-01T00:00:00.000Z',
+      );
+
+      expect(result).toEqual({
+        from: '2026-07-01T00:00:00.000Z',
+        to: '2026-08-01T00:00:00.000Z',
+        income: 900,
+        adjustments: -100,
+        total: 800,
+      });
+    });
+
+    it('rechaza periodos invalidos', async () => {
+      await expect(
+        service.findMyEarnings(userId, 'invalid', '2026-08-01T00:00:00.000Z'),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 
@@ -407,6 +486,34 @@ describe('WalletService', () => {
         adminNote: 'Transferido',
       });
       expect(result).toEqual(paidWithdrawal);
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId,
+          type: 'WITHDRAWAL_PAID',
+          data: expect.objectContaining({ withdrawalId }),
+        }),
+      );
+    });
+
+    it('permite pagar un retiro previamente aprobado', async () => {
+      const walletForWithdrawal = createWallet({ pendingBalance: 300 });
+      const approvedWithdrawal = {
+        id: withdrawalId,
+        wallet: walletForWithdrawal,
+        amount: 300,
+        status: WithdrawalStatus.APPROVED,
+      } as WithdrawalRequest;
+
+      withdrawalsRepository.findOne?.mockResolvedValue(approvedWithdrawal);
+      withdrawalsRepository.save?.mockImplementation(async (value) => value);
+
+      const result = await service.updateWithdrawalStatus(
+        withdrawalId,
+        WithdrawalStatus.PAID,
+      );
+
+      expect(walletForWithdrawal.pendingBalance).toBe(0);
+      expect(result.status).toBe(WithdrawalStatus.PAID);
     });
 
     it('rechaza un retiro, devuelve el saldo retenido y guarda la wallet', async () => {
@@ -445,6 +552,13 @@ describe('WalletService', () => {
         adminNote: 'CBU invalido',
       });
       expect(result).toEqual(rejectedWithdrawal);
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId,
+          type: 'WITHDRAWAL_REJECTED',
+          data: expect.objectContaining({ withdrawalId }),
+        }),
+      );
     });
 
     it('lanza NotFoundException si la solicitud de retiro no existe', async () => {
@@ -464,10 +578,7 @@ describe('WalletService', () => {
       });
 
       await expect(
-        service.updateWithdrawalStatus(
-          withdrawalId,
-          WithdrawalStatus.REJECTED,
-        ),
+        service.updateWithdrawalStatus(withdrawalId, WithdrawalStatus.REJECTED),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(walletsRepository.save).not.toHaveBeenCalled();
       expect(withdrawalsRepository.save).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,9 +20,7 @@ import { UserRole } from '../users/entity/user.entity';
 
 @Controller('wallets')
 export class WalletsController {
-  constructor(
-    private readonly walletsService: WalletService,
-  ) {}
+  constructor(private readonly walletsService: WalletService) {}
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
@@ -33,6 +32,16 @@ export class WalletsController {
   @UseGuards(JwtAuthGuard)
   findMyBalance(@Req() req: any) {
     return this.walletsService.findMyBalance(req.user.id);
+  }
+
+  @Get('me/earnings')
+  @UseGuards(JwtAuthGuard)
+  findMyEarnings(
+    @Req() req: any,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.walletsService.findMyEarnings(req.user.id, from, to);
   }
 
   @Post('withdrawals')
@@ -66,7 +75,7 @@ export class WalletsController {
   findAll() {
     return this.walletsService.findAll();
   }
-  
+
   @Get('admin/withdrawals/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -79,7 +88,6 @@ export class WalletsController {
   findOne(@Param('id') id: string) {
     return this.walletsService.findOne(id);
   }
-
 
   @Patch('admin/withdrawals/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -106,11 +114,10 @@ export class WalletsController {
     return this.walletsService.syncMissingWallets();
   }
 
-
   @Post('admin/release-available')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   releaseAvailableTransaction() {
-    return this.walletsService.releaseAvailableTransaction()
+    return this.walletsService.releaseAvailableTransaction();
   }
 }
