@@ -8,6 +8,7 @@ export enum OrderStatus {
 
 export enum PaymentMethod {
   MERCADO_PAGO = 'mercado_pago',
+  GETNET = 'getnet',
   CASH = 'cash',
   TRANSFER = 'transfer',
 }

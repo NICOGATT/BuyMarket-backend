@@ -2,9 +2,13 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
+  ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'crypto';
 import {
   MercadoPagoConfig,
   Payment as MercadoPagoPayment,
@@ -28,9 +32,30 @@ import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { ProductMediaType } from '../products/product-media/entities/product-media.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
+import { GetnetClient } from './getnet.client';
+
+interface GetnetWebhookBody {
+  payment_intent_id?: string;
+  checkout_id?: string;
+  order_id?: string;
+  mode?: string;
+  payment?: {
+    method?: string;
+    amount?: number;
+    currency?: string;
+    result?: {
+      payment_id?: string;
+      status?: string;
+      authorization_code?: string;
+      transaction_datetime?: string;
+      return_message?: string;
+    };
+  };
+}
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
   private client: MercadoPagoConfig;
 
   constructor(
@@ -47,6 +72,8 @@ export class PaymentsService {
     private readonly cloudinaryService: CloudinaryService,
 
     private readonly notificationsService: NotificationsService,
+
+    private readonly getnetClient: GetnetClient,
   ) {
     this.client = new MercadoPagoConfig({
       accessToken: this.configService.get<string>('MP_ACCESS_TOKEN')!,
@@ -521,5 +548,196 @@ export class PaymentsService {
       message: 'Comprobante subido correctamente',
       payment,
     };
+  }
+
+  // Getnet Web Checkout Global
+
+  async createGetnetOrder(orderId: string, userId: string) {
+    const order = await this.orderRepository.findOne({
+      where: {
+        id: orderId,
+        buyer: { id: userId },
+      },
+      relations: ['buyer', 'items', 'items.product'],
+    });
+
+    if (!order) {
+      throw new NotFoundException('Orden no encontrada');
+    }
+
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException('La orden no esta pendiente de pago');
+    }
+
+    if (order.paymentMethod !== PaymentMethod.GETNET) {
+      throw new BadRequestException(
+        'La orden no usa GetNet como metodo de pago',
+      );
+    }
+
+    if (order.paymentPreferenceId) {
+      return this.getnetPaymentIntentResponse(
+        order.id,
+        order.paymentPreferenceId,
+      );
+    }
+
+    const result = await this.getnetClient.createPaymentIntent({
+      order_id: order.id,
+      payment: {
+        currency: 'ARS',
+        amount: this.toCents(order.total),
+      },
+      product: order.items.map((item) => ({
+        product_type: 'physical_goods',
+        title: item.product.title.slice(0, 128),
+        description: item.product.description?.slice(0, 1024),
+        value: this.toCents(item.unitPrice),
+        quantity: item.quantity,
+      })),
+      customer: {
+        customer_id: order.buyer.id,
+        first_name: order.buyer.firstName.slice(0, 40),
+        last_name: order.buyer.lastName.slice(0, 80),
+        name: `${order.buyer.firstName} ${order.buyer.lastName}`.slice(0, 100),
+        email: order.buyer.email,
+        document_type: 'DNI',
+        checked_email: order.buyer.isEmailVerified,
+      },
+    });
+
+    order.paymentPreferenceId = result.payment_intent_id;
+    order.paymentStatus = 'Pending';
+    await this.orderRepository.save(order);
+
+    return this.getnetPaymentIntentResponse(order.id, result.payment_intent_id);
+  }
+
+  async handleGetnetWebhook(
+    authorization: string | undefined,
+    body: GetnetWebhookBody,
+  ) {
+    this.validateGetnetWebhookAuthorization(authorization);
+
+    const orderId = body?.order_id;
+    const paymentIntentId = body?.payment_intent_id;
+    const paymentStatus = body?.payment?.result?.status;
+
+    if (!orderId || !paymentIntentId || !paymentStatus) {
+      this.logger.warn('Ignoring an incomplete Getnet webhook');
+      return { received: true };
+    }
+
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId, paymentMethod: PaymentMethod.GETNET },
+      relations: ['buyer', 'items', 'items.product', 'items.product.seller'],
+    });
+
+    if (!order) {
+      this.logger.warn(`Ignoring Getnet webhook for unknown order ${orderId}`);
+      return { received: true };
+    }
+
+    if (order.paymentPreferenceId !== paymentIntentId) {
+      this.logger.warn(
+        `Ignoring mismatched Getnet intent for order ${orderId}`,
+      );
+      return { received: true };
+    }
+
+    if (
+      body.payment?.currency !== 'ARS' ||
+      body.payment.amount !== this.toCents(order.total)
+    ) {
+      throw new BadRequestException(
+        'El monto o la moneda del pago Getnet no coincide con la orden',
+      );
+    }
+
+    if (paymentStatus !== 'Authorized' && paymentStatus !== 'Denied') {
+      this.logger.warn(`Ignoring unknown Getnet status ${paymentStatus}`);
+      return { received: true };
+    }
+
+    const wasAlreadyPaid = order.status === OrderStatus.PAID;
+    const wasAlreadyRejected = order.status === OrderStatus.REJECTED;
+
+    if (paymentStatus === 'Authorized') {
+      if (!body.payment?.result?.payment_id) {
+        throw new BadRequestException(
+          'El webhook autorizado de Getnet no tiene payment_id',
+        );
+      }
+
+      order.paymentId = body.payment.result.payment_id;
+      order.paymentStatus = paymentStatus;
+      order.status = OrderStatus.PAID;
+      await this.orderRepository.save(order);
+
+      if (wasAlreadyPaid) {
+        return { received: true };
+      }
+
+      const sellers = await this.creditSellersFromOrder(order, true);
+      await this.notifyApprovedOrder(order, sellers);
+      return { received: true };
+    }
+
+    if (wasAlreadyPaid) {
+      return { received: true };
+    }
+
+    order.paymentId = body.payment?.result?.payment_id ?? order.paymentId;
+    order.paymentStatus = paymentStatus;
+    order.status = OrderStatus.REJECTED;
+    await this.orderRepository.save(order);
+
+    if (!wasAlreadyRejected) {
+      await this.notifyRejectedPayment(order);
+    }
+
+    return { received: true };
+  }
+
+  private getnetPaymentIntentResponse(
+    orderId: string,
+    paymentIntentId: string,
+  ) {
+    return {
+      orderId,
+      paymentIntentId,
+      checkoutType: 'iframe' as const,
+      loaderUrl: this.getnetClient.getLoaderUrl(),
+    };
+  }
+
+  private toCents(value: number | string) {
+    return Math.round(Number(value) * 100);
+  }
+
+  private validateGetnetWebhookAuthorization(authorization?: string) {
+    const username = this.configService
+      .get<string>('GETNET_WEBHOOK_USERNAME')
+      ?.trim();
+    const password = this.configService
+      .get<string>('GETNET_WEBHOOK_PASSWORD')
+      ?.trim();
+
+    if (!username || !password) {
+      throw new ServiceUnavailableException(
+        'El webhook de Getnet todavia no esta configurado',
+      );
+    }
+
+    const expected = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+    const providedBuffer = Buffer.from(authorization ?? '');
+    const expectedBuffer = Buffer.from(expected);
+    const isValid =
+      providedBuffer.length === expectedBuffer.length &&
+      timingSafeEqual(providedBuffer, expectedBuffer);
+
+    if (!isValid) {
+      throw new UnauthorizedException('Credenciales de webhook invalidas');
+    }
   }
 }

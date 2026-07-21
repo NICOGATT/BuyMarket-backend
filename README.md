@@ -96,6 +96,7 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
 # Buy Market
 
 Buy Market es una aplicación multiplataforma para Android, iOS y web orientada a la compra, venta y entrega de productos entre usuarios. La propuesta combina un marketplace de productos, similar a Mercado Libre, con un sistema de entregas rápidas o programadas, similar a PedidosYa.
@@ -834,8 +835,6 @@ Los reclamos deben poder ser atendidos por el dueño de la aplicación o asistid
 
 - El dinero queda acreditado en la wallet del usuario o la operación queda registrada como pendiente, rechazada o fallida.
 
-
-
 ## Especificaciones generales de casos de uso
 
 ### Seguridad
@@ -934,3 +933,63 @@ Luego se puede agregar:
 - Gestión avanzada de reclamos con IA.
 - Retiros automáticos semanales.
 - Calificaciones y reputación avanzada.
+
+## Getnet Web Checkout Global
+
+La integración usa Web Checkout Global en modo `iframe`. Las credenciales se
+leen solamente desde variables de entorno y no son necesarias para iniciar el
+backend; los endpoints de Getnet responderán que la integración no está
+configurada hasta que se completen.
+
+### Variables de entorno
+
+```env
+# Homologación
+GETNET_API_URL=https://api.pre.globalgetnet.com
+GETNET_WEB_URL=https://www.pre.globalgetnet.com
+
+# Entregadas por Getnet
+GETNET_CLIENT_ID=
+GETNET_CLIENT_SECRET=
+
+# Elegidas por BuyMarket y configuradas también en el Merchant Portal
+GETNET_WEBHOOK_USERNAME=
+GETNET_WEBHOOK_PASSWORD=
+```
+
+En producción deben usarse `https://api.globalgetnet.com` y
+`https://www.globalgetnet.com`. El callback que debe registrarse en Technical
+Configuration es:
+
+```text
+{BACKEND_URL}/payments/getnet/webhook
+```
+
+El callback utiliza HTTP Basic Auth con `GETNET_WEBHOOK_USERNAME` y
+`GETNET_WEBHOOK_PASSWORD`.
+
+### Contrato del checkout
+
+Una orden debe crearse con `paymentMethod: "getnet"`. Luego el frontend llama,
+con JWT, a:
+
+```http
+POST /payments/getnet/create-order/:orderId
+```
+
+La respuesta tiene esta forma:
+
+```json
+{
+  "orderId": "uuid-de-la-orden",
+  "paymentIntentId": "uuid-del-payment-intent",
+  "checkoutType": "iframe",
+  "loaderUrl": "https://www.pre.globalgetnet.com/digital-checkout/loader.js"
+}
+```
+
+El frontend carga `loaderUrl`, ejecuta
+`loader.init({ paymentIntentId, checkoutType: "iframe" })` e inserta el iframe
+generado en el contenedor de pago. La interfaz del iframe no confirma por sí
+sola la compra: la fuente de verdad es el estado de la orden actualizado por el
+webhook (`paid` para `Authorized` y `rejected` para `Denied`).

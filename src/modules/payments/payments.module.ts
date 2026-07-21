@@ -7,6 +7,7 @@ import { WalletsModule } from '../wallet/wallet.module';
 import { Payment } from './entity/payment.entity';
 import { CloudinaryModule } from '../../cloudinary/cloudinary.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { GetnetClient } from './getnet.client';
 
 @Module({
   imports: [
@@ -16,6 +17,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
     NotificationsModule,
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService],
+  providers: [PaymentsService, GetnetClient],
 })
 export class PaymentsModule {}

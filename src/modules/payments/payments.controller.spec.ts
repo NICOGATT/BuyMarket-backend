@@ -14,6 +14,8 @@ describe('PaymentsController', () => {
           useValue: {
             createMercadoPagoPreference: jest.fn(),
             handleMercadoPagoWebhook: jest.fn(),
+            createGetnetOrder: jest.fn(),
+            handleGetnetWebhook: jest.fn(),
             notifyTransferPayment: jest.fn(),
             updateTransferPaymentStatus: jest.fn(),
           },

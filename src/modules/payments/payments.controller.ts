@@ -5,6 +5,7 @@ import {
   Controller,
   ExceptionFilter,
   HttpStatus,
+  Headers,
   Param,
   Patch,
   Post,
@@ -66,11 +67,22 @@ export class PaymentsController {
   }
 
   @Post('mercadopago/webhook')
-  handleMercadoPagoWebhook(
-    @Body() body: any,
-    @Query() query: any,
-  ) {
+  handleMercadoPagoWebhook(@Body() body: any, @Query() query: any) {
     return this.paymentsService.handleMercadoPagoWebhook(body, query);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('getnet/create-order/:orderId')
+  createGetnetOrder(@Param('orderId') orderId: string, @Req() req: any) {
+    return this.paymentsService.createGetnetOrder(orderId, req.user.id);
+  }
+
+  @Post('getnet/webhook')
+  handleGetnetWebhook(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: any,
+  ) {
+    return this.paymentsService.handleGetnetWebhook(authorization, body);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -108,14 +120,14 @@ export class PaymentsController {
     }),
   )
   uploadProof(
-    @Param('paymentId') paymentId : string, 
-    @UploadedFile() file : Express.Multer.File, 
-    @Req() req
+    @Param('paymentId') paymentId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req,
   ) {
     return this.paymentsService.uploadedTranferProof(
       paymentId,
-      file, 
-      req.user.id
-    )
+      file,
+      req.user.id,
+    );
   }
 }

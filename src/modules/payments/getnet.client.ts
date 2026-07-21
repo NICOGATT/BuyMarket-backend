@@ -1,0 +1,185 @@
+import {
+  BadGatewayException,
+  GatewayTimeoutException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+export interface GetnetPaymentIntentRequest {
+  order_id: string;
+  payment: {
+    currency: 'ARS';
+    amount: number;
+  };
+  product: Array<{
+    product_type: 'physical_goods';
+    title: string;
+    description?: string;
+    value: number;
+    quantity: number;
+  }>;
+  customer: {
+    customer_id: string;
+    first_name: string;
+    last_name: string;
+    name: string;
+    email?: string;
+    document_type: 'DNI';
+    checked_email: boolean;
+  };
+}
+
+export interface GetnetPaymentIntentResponse {
+  payment_intent_id: string;
+}
+
+interface GetnetTokenCache {
+  accessToken: string;
+  expiresAt: number;
+}
+
+@Injectable()
+export class GetnetClient {
+  private readonly logger = new Logger(GetnetClient.name);
+  private readonly timeoutMs = 10_000;
+  private tokenCache: GetnetTokenCache | null = null;
+
+  constructor(private readonly configService: ConfigService) {}
+
+  async createPaymentIntent(
+    payload: GetnetPaymentIntentRequest,
+  ): Promise<GetnetPaymentIntentResponse> {
+    let response = await this.sendPaymentIntent(payload);
+
+    if (response.status === 401) {
+      this.tokenCache = null;
+      response = await this.sendPaymentIntent(payload);
+    }
+
+    if (!response.ok) {
+      this.logger.error(
+        `Getnet payment intent request failed with status ${response.status}`,
+      );
+      throw new BadGatewayException(
+        'Getnet no pudo crear la intencion de pago',
+      );
+    }
+
+    const result =
+      (await response.json()) as Partial<GetnetPaymentIntentResponse>;
+
+    if (!result.payment_intent_id) {
+      this.logger.error('Getnet returned a payment intent without an id');
+      throw new BadGatewayException('Getnet devolvio una respuesta invalida');
+    }
+
+    return { payment_intent_id: result.payment_intent_id };
+  }
+
+  getLoaderUrl() {
+    return `${this.getBaseUrl('GETNET_WEB_URL')}/digital-checkout/loader.js`;
+  }
+
+  private async sendPaymentIntent(payload: GetnetPaymentIntentRequest) {
+    const accessToken = await this.getAccessToken();
+
+    return this.fetchWithTimeout(
+      `${this.getApiUrl()}/dpy/web-checkout/v1/payment-intent`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  private async getAccessToken() {
+    if (this.tokenCache && Date.now() < this.tokenCache.expiresAt) {
+      return this.tokenCache.accessToken;
+    }
+
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: this.getRequiredConfig('GETNET_CLIENT_ID'),
+      client_secret: this.getRequiredConfig('GETNET_CLIENT_SECRET'),
+    });
+    const response = await this.fetchWithTimeout(
+      `${this.getApiUrl()}/authentication/oauth2/access_token`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: body.toString(),
+      },
+    );
+
+    if (!response.ok) {
+      this.logger.error(
+        `Getnet authentication failed with status ${response.status}`,
+      );
+      throw new BadGatewayException('No se pudo autenticar con Getnet');
+    }
+
+    const token = (await response.json()) as {
+      access_token?: string;
+      expires_in?: number | string;
+    };
+    const expiresInSeconds = Number(token.expires_in);
+
+    if (!token.access_token || !Number.isFinite(expiresInSeconds)) {
+      this.logger.error('Getnet returned an invalid authentication response');
+      throw new BadGatewayException('Getnet devolvio una respuesta invalida');
+    }
+
+    this.tokenCache = {
+      accessToken: token.access_token,
+      expiresAt: Date.now() + Math.max(0, expiresInSeconds * 1000 - 60_000),
+    };
+
+    return token.access_token;
+  }
+
+  private getApiUrl() {
+    return this.getBaseUrl('GETNET_API_URL');
+  }
+
+  private getBaseUrl(key: string) {
+    return this.getRequiredConfig(key).replace(/\/$/, '');
+  }
+
+  private getRequiredConfig(key: string) {
+    const value = this.configService.get<string>(key)?.trim();
+
+    if (!value) {
+      throw new ServiceUnavailableException(
+        'La integracion con Getnet todavia no esta configurada',
+      );
+    }
+
+    return value;
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit) {
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new GatewayTimeoutException('Getnet no respondio a tiempo');
+      }
+
+      this.logger.error('Could not connect to Getnet');
+      throw new ServiceUnavailableException('No se pudo conectar con Getnet');
+    }
+  }
+}
