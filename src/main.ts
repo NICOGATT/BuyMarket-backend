@@ -8,7 +8,9 @@ const defaultCorsOrigins = [
   'http://localhost:5173',
   "https://buy-market-web.vercel.app", 
   "https://hdphxs14-5173.brs.devtunnels.ms",
-  "https://xwjbvbw0-5173.brs.devtunnels.ms"
+  "https://xwjbvbw0-5173.brs.devtunnels.ms", 
+  "https://buymarket.com.ar", 
+  "https://www.buymarket.com.ar"
 ];
 
 function getCorsOrigins() {

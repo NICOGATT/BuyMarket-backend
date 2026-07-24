@@ -4,11 +4,13 @@ import {
   Entity,
   JoinColumn,
   OneToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Order } from '../../orders/entities/order.entity';
 import { PaymentMethod } from '../../orders/entities/order.enums';
+import { PaymentAttempt } from './payment-attempt.entity';
 
 export enum PaymentStatus {
   PENDING = 'PENDING',
@@ -46,8 +48,11 @@ export class Payment {
   @JoinColumn()
   order!: Order;
 
-  @Column({nullable : true})
-  proofUploadedAt? : Date; 
+  @OneToMany(() => PaymentAttempt, (attempt) => attempt.payment)
+  attempts?: PaymentAttempt[];
+
+  @Column({ nullable: true })
+  proofUploadedAt?: Date;
 
   @CreateDateColumn()
   createdAt: Date | undefined;

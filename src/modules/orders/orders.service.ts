@@ -169,19 +169,32 @@ export class OrdersService {
       cart: { id: cart.id },
     });
 
-    if (selectedPaymentMethod.method === PaymentMethod.TRANSFER) {
+    if (
+      selectedPaymentMethod.method === PaymentMethod.TRANSFER ||
+      selectedPaymentMethod.method === PaymentMethod.GETNET_QR
+    ) {
       await this.paymentRepository.save(
         this.paymentRepository.create({
-          method: PaymentMethod.TRANSFER,
+          method: selectedPaymentMethod.method,
           status: PaymentStatus.PENDING,
           amount: total,
-          senderAlias: selectedPaymentMethod.senderAlias,
-          senderCbu: selectedPaymentMethod.senderCbu,
+          senderAlias:
+            selectedPaymentMethod.method === PaymentMethod.TRANSFER
+              ? selectedPaymentMethod.senderAlias
+              : undefined,
+          senderCbu:
+            selectedPaymentMethod.method === PaymentMethod.TRANSFER
+              ? selectedPaymentMethod.senderCbu
+              : undefined,
           order: savedOrder,
         }),
       );
 
       const orderWithItems = await this.findOne(savedOrder.id, userId);
+
+      if (selectedPaymentMethod.method === PaymentMethod.GETNET_QR) {
+        return orderWithItems;
+      }
 
       return {
         ...orderWithItems,

@@ -6,6 +6,7 @@ import {
   ExceptionFilter,
   HttpStatus,
   Headers,
+  Get,
   Param,
   Patch,
   Post,
@@ -24,6 +25,7 @@ import { UserRole } from '../users/entity/user.entity';
 import { NotifyTransferPaymentDto } from './dto/notify-transfer-payment.dto';
 import { UpdateTransferPaymentStatusDto } from './dto/update-transfer-payment-status.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { GetnetQrService } from './getnet-qr.service';
 
 const transferProofMaxSize = 5 * 1024 * 1024;
 const transferProofMaxSizeMessage = 'El comprobante no puede superar los 5 MB.';
@@ -52,7 +54,15 @@ class TransferProofUploadExceptionFilter implements ExceptionFilter {
 
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly getnetQrService: GetnetQrService,
+  ) {}
+
+  @Get('capabilities')
+  getCapabilities() {
+    return this.getnetQrService.getCapabilities();
+  }
 
   @UseGuards(JwtAuthGuard)
   @Post('mercadopago/create-preference/:orderId')
@@ -83,6 +93,17 @@ export class PaymentsController {
     @Body() body: any,
   ) {
     return this.paymentsService.handleGetnetWebhook(authorization, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('getnet-qr/create/:orderId')
+  createGetnetQrPayment(@Param('orderId') orderId: string, @Req() req: any) {
+    return this.getnetQrService.createPayment(orderId, req.user.id);
+  }
+
+  @Post('getnet-qr/webhook')
+  handleGetnetQrWebhook(@Body() body: unknown) {
+    return this.getnetQrService.handleWebhook(body);
   }
 
   @UseGuards(JwtAuthGuard)

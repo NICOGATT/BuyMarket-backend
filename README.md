@@ -993,3 +993,34 @@ El frontend carga `loaderUrl`, ejecuta
 generado en el contenedor de pago. La interfaz del iframe no confirma por sí
 sola la compra: la fuente de verdad es el estado de la orden actualizado por el
 webhook (`paid` para `Authorized` y `rejected` para `Denied`).
+
+## Getnet QR interoperable
+
+El QR interoperable usa Global API y credenciales separadas de Web Checkout.
+Debe habilitarse para el comercio en Getnet antes de activar la opcion:
+
+```env
+GETNET_QR_ENABLED=false
+GETNET_QR_API_URL=https://api.pre.globalgetnet.com
+GETNET_QR_CLIENT_ID=
+GETNET_QR_CLIENT_SECRET=
+GETNET_QR_SELLER_ID=
+GETNET_QR_CHANNEL=WEB
+GETNET_QR_WEBHOOK_URL=https://api.example.com/payments/getnet-qr/webhook
+GETNET_QR_EXPIRATION_MINUTES=10
+```
+
+El frontend consulta `GET /payments/capabilities`, por lo que el medio queda
+oculto hasta que `GETNET_QR_ENABLED=true` y todas las credenciales requeridas
+esten presentes. Una orden se crea con `paymentMethod: "getnet_qr"` y luego se
+solicita el codigo mediante:
+
+```http
+POST /payments/getnet-qr/create/:orderId
+```
+
+Getnet debe notificar a `GETNET_QR_WEBHOOK_URL`. El callback no se usa como
+prueba de pago: el backend consulta la transaccion a Getnet, compara orden,
+monto y moneda, y recien entonces actualiza la orden y acredita a los
+vendedores. En produccion deben usarse la URL y credenciales Global API
+entregadas durante la homologacion para Argentina.

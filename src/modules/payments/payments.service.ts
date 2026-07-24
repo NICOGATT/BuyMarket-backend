@@ -363,7 +363,7 @@ export class PaymentsService {
     };
   }
 
-  private async creditSellersFromOrder(order: Order, shouldCredit: boolean) {
+  async creditSellersFromOrder(order: Order, shouldCredit: boolean) {
     const amountsBySeller = new Map<
       string,
       { amount: number; commissionPercentage: number; productTitles: string[] }
@@ -410,7 +410,7 @@ export class PaymentsService {
     }));
   }
 
-  private async notifyApprovedOrder(
+  async notifyApprovedOrder(
     order: Order,
     sellers: Array<{
       sellerId: string;
@@ -462,7 +462,7 @@ export class PaymentsService {
     ]);
   }
 
-  private async notifyRejectedPayment(order: Order) {
+  async notifyRejectedPayment(order: Order) {
     await this.notificationsService.createOnce({
       userId: order.buyer.id,
       type: NotificationType.PAYMENT_REJECTED,
