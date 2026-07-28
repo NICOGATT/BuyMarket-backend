@@ -273,6 +273,19 @@ export class PaymentsService {
     orderId: string,
     dto: UpdateTransferPaymentStatusDto,
   ) {
+    return this.updateManualPaymentStatus(orderId, dto, [
+      PaymentMethod.TRANSFER,
+    ]);
+  }
+
+  async updateManualPaymentStatus(
+    orderId: string,
+    dto: UpdateTransferPaymentStatusDto,
+    allowedMethods: PaymentMethod[] = [
+      PaymentMethod.TRANSFER,
+      PaymentMethod.GETNET_QR,
+    ],
+  ) {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
       relations: [
@@ -288,14 +301,24 @@ export class PaymentsService {
       throw new NotFoundException('Orden no encontrada');
     }
 
-    if (order.paymentMethod !== PaymentMethod.TRANSFER) {
+    if (!allowedMethods.includes(order.paymentMethod)) {
       throw new BadRequestException(
-        'La orden no usa transferencia como metodo de pago',
+        'La orden no usa un metodo de pago con validacion manual',
       );
     }
 
     if (!order.payment) {
       throw new NotFoundException('Pago no encontrado');
+    }
+
+    if (
+      dto.status === PaymentStatus.COMPLETED &&
+      order.paymentMethod === PaymentMethod.GETNET_QR &&
+      !order.payment.proofImageUrl
+    ) {
+      throw new BadRequestException(
+        'El comprobante del pago QR es obligatorio',
+      );
     }
 
     if (
@@ -314,12 +337,12 @@ export class PaymentsService {
       if (isSameCompletedStatus) {
         const sellers = await this.creditSellersFromOrder(order, false);
         await this.notifyApprovedOrder(order, sellers);
-        return this.transferStatusResponse(order);
+        return this.manualPaymentStatusResponse(order);
       }
 
       if (isSameRejectedStatus) {
         await this.notifyRejectedPayment(order);
-        return this.transferStatusResponse(order);
+        return this.manualPaymentStatusResponse(order);
       }
 
       throw new BadRequestException('El pago ya fue procesado');
@@ -359,7 +382,10 @@ export class PaymentsService {
       orderId: order.id,
       orderStatus: order.status,
       paymentStatus: order.payment.status,
-      message: 'Transferencia rechazada',
+      message:
+        order.paymentMethod === PaymentMethod.GETNET_QR
+          ? 'Pago QR rechazado'
+          : 'Transferencia rechazada',
     };
   }
 
@@ -477,7 +503,7 @@ export class PaymentsService {
     });
   }
 
-  private transferStatusResponse(order: Order) {
+  private manualPaymentStatusResponse(order: Order) {
     const completed = order.payment?.status === PaymentStatus.COMPLETED;
     return {
       orderId: order.id,
@@ -485,7 +511,9 @@ export class PaymentsService {
       paymentStatus: order.payment?.status,
       message: completed
         ? 'Pago confirmado, estamos asignando a un repartidor'
-        : 'Transferencia rechazada',
+        : order.paymentMethod === PaymentMethod.GETNET_QR
+          ? 'Pago QR rechazado'
+          : 'Transferencia rechazada',
     };
   }
 

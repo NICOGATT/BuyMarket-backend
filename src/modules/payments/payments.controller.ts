@@ -122,6 +122,16 @@ export class PaymentsController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @Patch('admin/manual/:orderId/status')
+  updateManualPaymentStatus(
+    @Param('orderId') orderId: string,
+    @Body() dto: UpdateTransferPaymentStatusDto,
+  ) {
+    return this.paymentsService.updateManualPaymentStatus(orderId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @Patch('admin/transfer/:orderId/status')
   updateTransferPaymentStatus(
     @Param('orderId') orderId: string,

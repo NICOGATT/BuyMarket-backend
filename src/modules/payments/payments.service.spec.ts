@@ -800,4 +800,104 @@ describe('PaymentsService', () => {
       expect(notificationsService.createManyOnce).toHaveBeenCalled();
     });
   });
+
+  describe('updateManualPaymentStatus', () => {
+    it('confirma un pago QR manual y acredita las wallets una sola vez', async () => {
+      const payment = {
+        id: 'payment-qr',
+        method: PaymentMethod.GETNET_QR,
+        status: PaymentStatus.PENDING,
+        amount: 1500,
+        proofImageUrl: 'https://example.com/proof.png',
+      } as PaymentEntity;
+      const order = createOrder({
+        paymentMethod: PaymentMethod.GETNET_QR,
+        payment,
+      });
+      orderRepository.findOne?.mockResolvedValue(order);
+      orderRepository.save?.mockResolvedValue(order);
+      paymentRepository.save?.mockResolvedValue(payment);
+      walletService.creditFromOrder.mockResolvedValue({} as never);
+
+      const result = await service.updateManualPaymentStatus(orderId, {
+        status: PaymentStatus.COMPLETED,
+        adminNote: 'Comprobante QR validado',
+      });
+
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(payment.status).toBe(PaymentStatus.COMPLETED);
+      expect(payment.adminNote).toBe('Comprobante QR validado');
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(result.paymentStatus).toBe(PaymentStatus.COMPLETED);
+    });
+
+    it('rechaza la aprobacion manual de un metodo automatico', async () => {
+      const order = createOrder({
+        paymentMethod: PaymentMethod.MERCADO_PAGO,
+      });
+      orderRepository.findOne?.mockResolvedValue(order);
+
+      await expect(
+        service.updateManualPaymentStatus(orderId, {
+          status: PaymentStatus.COMPLETED,
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(paymentRepository.save).not.toHaveBeenCalled();
+      expect(orderRepository.save).not.toHaveBeenCalled();
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('exige comprobante antes de aprobar un pago QR manual', async () => {
+      const payment = {
+        id: 'payment-qr',
+        method: PaymentMethod.GETNET_QR,
+        status: PaymentStatus.PENDING,
+        amount: 1500,
+      } as PaymentEntity;
+      const order = createOrder({
+        paymentMethod: PaymentMethod.GETNET_QR,
+        payment,
+      });
+      orderRepository.findOne?.mockResolvedValue(order);
+
+      await expect(
+        service.updateManualPaymentStatus(orderId, {
+          status: PaymentStatus.COMPLETED,
+        }),
+      ).rejects.toThrow('El comprobante del pago QR es obligatorio');
+
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('no vuelve a acreditar un pago QR que ya estaba aprobado', async () => {
+      const payment = {
+        id: 'payment-qr',
+        method: PaymentMethod.GETNET_QR,
+        status: PaymentStatus.COMPLETED,
+        amount: 1500,
+        proofImageUrl: 'https://example.com/proof.png',
+      } as PaymentEntity;
+      const order = createOrder({
+        paymentMethod: PaymentMethod.GETNET_QR,
+        payment,
+      });
+      order.status = OrderStatus.PAID;
+      orderRepository.findOne?.mockResolvedValue(order);
+
+      await expect(
+        service.updateManualPaymentStatus(orderId, {
+          status: PaymentStatus.COMPLETED,
+        }),
+      ).resolves.toEqual({
+        orderId,
+        orderStatus: OrderStatus.PAID,
+        paymentStatus: PaymentStatus.COMPLETED,
+        message: 'Pago confirmado, estamos asignando a un repartidor',
+      });
+
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+      expect(notificationsService.createManyOnce).toHaveBeenCalled();
+    });
+  });
 });
