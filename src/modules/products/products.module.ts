@@ -15,6 +15,7 @@ import { ProductsService } from './products.service';
 import { UserAddress } from '../user-address/entities/user-address.entity';
 
 import { CloudinaryModule } from '../../cloudinary/cloudinary.module';
+import { Brand } from '../brands/entities/brand.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -26,9 +27,10 @@ import { CloudinaryModule } from '../../cloudinary/cloudinary.module';
       ProductVariantAttributeValue,
       SubCategoryAttribute,
       ProductAttributeValue,
-      UserAddress
+      UserAddress,
+      Brand,
     ]),
-    CloudinaryModule
+    CloudinaryModule,
   ],
   controllers: [ProductsController],
   providers: [ProductsService],

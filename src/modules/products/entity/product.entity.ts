@@ -16,6 +16,7 @@ import { SubCategory } from '../../subcategoria/entities/subcategoria.entity';
 import { ProductAttributeValue } from './product-attributes-value.entity';
 import { UserAddress } from '../../user-address/entities/user-address.entity';
 import { ProductVariant } from './product-variant.entity';
+import { Brand } from '../../brands/entities/brand.entity';
 
 export enum ProductApprovalStatus {
   PENDING = 'pending',
@@ -44,22 +45,28 @@ export class Product {
   @Column({ type: 'int', default: 0 })
   stock!: number;
 
-  @OneToMany(() => ProductVariant, variant => variant.product, {
+  @OneToMany(() => ProductVariant, (variant) => variant.product, {
     cascade: true,
   })
   variants!: ProductVariant[];
 
   @ManyToOne(() => Category, (category) => category.products, {
-    nullable: false, 
-    eager : true,
+    nullable: false,
+    eager: true,
   })
-  category! : Category;
-  @ManyToOne(() => SubCategory, subCategory => subCategory.products, {
-  nullable: true,
+  category!: Category;
+  @ManyToOne(() => SubCategory, (subCategory) => subCategory.products, {
+    nullable: true,
   })
   subCategory?: SubCategory;
 
-  @OneToMany(() => ProductMedia, media => media.product, {
+  @ManyToOne(() => Brand, (brand) => brand.products, {
+    nullable: true,
+    onDelete: 'RESTRICT',
+  })
+  brand?: Brand | null;
+
+  @OneToMany(() => ProductMedia, (media) => media.product, {
     cascade: true,
   })
   media!: ProductMedia[];
@@ -84,22 +91,18 @@ export class Product {
   seller!: User;
 
   @OneToMany(() => CartItem, (item) => item.product)
-  cartItems! : CartItem[];
+  cartItems!: CartItem[];
 
-  @OneToMany(
-    () => ProductAttributeValue,
-    value => value.product,
-    {
-      cascade: true,
-    },
-  )
+  @OneToMany(() => ProductAttributeValue, (value) => value.product, {
+    cascade: true,
+  })
   attributeValues!: ProductAttributeValue[];
 
   @ManyToOne(() => UserAddress, {
-    nullable : true,
+    nullable: true,
   })
-  pickupAddress? : UserAddress | null;
-  
+  pickupAddress?: UserAddress | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

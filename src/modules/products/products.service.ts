@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
@@ -7,7 +11,10 @@ import { Product, ProductApprovalStatus } from './entity/product.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Category } from '../categories/entities/category.entity';
-import { ProductMedia, ProductMediaType } from './product-media/entities/product-media.entity';
+import {
+  ProductMedia,
+  ProductMediaType,
+} from './product-media/entities/product-media.entity';
 import { ProductAttributeValue } from './entity/product-attributes-value.entity';
 import { ProductVariantAttributeValue } from './entity/product-variant-attribute-value.entity';
 import { ProductVariant } from './entity/product-variant.entity';
@@ -21,6 +28,7 @@ import {
 import { normalizeSubCategoryAttributesAppliesTo } from '../subcategoria/subcategoria-attributes/attribute-applies-to.util';
 import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
+import { Brand } from '../brands/entities/brand.entity';
 
 @Injectable()
 export class ProductsService {
@@ -30,25 +38,27 @@ export class ProductsService {
     @InjectRepository(Category)
     private readonly categoriesRepository: Repository<Category>,
     @InjectRepository(ProductMedia)
-    private readonly productMediaRepository : Repository<ProductMedia>, 
+    private readonly productMediaRepository: Repository<ProductMedia>,
     @InjectRepository(ProductAttributeValue)
-    private readonly productAttributeValueRepository : Repository<ProductAttributeValue>,
+    private readonly productAttributeValueRepository: Repository<ProductAttributeValue>,
     @InjectRepository(ProductVariant)
-    private readonly productVariantRepository : Repository<ProductVariant>,
+    private readonly productVariantRepository: Repository<ProductVariant>,
     @InjectRepository(ProductVariantAttributeValue)
-    private readonly productVariantAttributeValueRepository : Repository<ProductVariantAttributeValue>,
+    private readonly productVariantAttributeValueRepository: Repository<ProductVariantAttributeValue>,
     @InjectRepository(SubCategory)
     private readonly subCategoryRepository: Repository<SubCategory>,
     @InjectRepository(UserAddress)
-    private readonly userAddressRepository : Repository<UserAddress>,
-    
-    private readonly cloudinaryService : CloudinaryService
+    private readonly userAddressRepository: Repository<UserAddress>,
+    @InjectRepository(Brand)
+    private readonly brandsRepository: Repository<Brand>,
+
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   private removeSellerPassword<T extends Product | Product[]>(products: T): T {
     const productList = Array.isArray(products) ? products : [products];
 
-    productList.forEach(product => {
+    productList.forEach((product) => {
       if (product.seller) {
         delete (product.seller as { password?: string }).password;
       }
@@ -57,12 +67,14 @@ export class ProductsService {
     return products;
   }
 
-  private applyVariantPriceAndStock<T extends Product | Product[]>(products: T): T {
+  private applyVariantPriceAndStock<T extends Product | Product[]>(
+    products: T,
+  ): T {
     const productList = Array.isArray(products) ? products : [products];
 
-    productList.forEach(product => {
+    productList.forEach((product) => {
       const activeVariants = (product.variants ?? []).filter(
-        variant => variant.isActive,
+        (variant) => variant.isActive,
       );
 
       if (activeVariants.length === 0) {
@@ -70,7 +82,7 @@ export class ProductsService {
       }
 
       product.price = Math.min(
-        ...activeVariants.map(variant => Number(variant.price)),
+        ...activeVariants.map((variant) => Number(variant.price)),
       );
       product.stock = activeVariants.reduce(
         (total, variant) => total + Number(variant.stock),
@@ -81,19 +93,23 @@ export class ProductsService {
     return products;
   }
 
-  private normalizeProductResponse<T extends Product | Product[]>(products: T): T {
+  private normalizeProductResponse<T extends Product | Product[]>(
+    products: T,
+  ): T {
     this.applyVariantPriceAndStock(products);
     this.normalizeVariantAttributes(products);
 
     return this.removeSellerPassword(products);
   }
 
-  private normalizeVariantAttributes<T extends Product | Product[]>(products: T): T {
+  private normalizeVariantAttributes<T extends Product | Product[]>(
+    products: T,
+  ): T {
     const productList = Array.isArray(products) ? products : [products];
 
-    productList.forEach(product => {
-      (product.variants ?? []).forEach(variant => {
-        const attributes = (variant.attributes ?? []).map(value => ({
+    productList.forEach((product) => {
+      (product.variants ?? []).forEach((variant) => {
+        const attributes = (variant.attributes ?? []).map((value) => ({
           id: value.id,
           attributeId: value.attribute?.id,
           name: value.attribute?.name,
@@ -176,7 +192,7 @@ export class ProductsService {
   ) {
     const sentAttributes = variant.attributes ?? [];
     const requiredAttributes = subCategory.attributes.filter(
-      attribute =>
+      (attribute) =>
         attribute.required &&
         attribute.appliesTo === AttributeAppliesTo.VARIANT &&
         attribute.usage !== AttributeUsage.VARIANT_SIZE &&
@@ -185,7 +201,7 @@ export class ProductsService {
 
     for (const requiredAttribute of requiredAttributes) {
       const exists = sentAttributes.some(
-        item => item.attributeId === requiredAttribute.id,
+        (item) => item.attributeId === requiredAttribute.id,
       );
 
       if (!exists) {
@@ -201,9 +217,9 @@ export class ProductsService {
     variant: NonNullable<CreateProductDto['variants']>[number],
     savedVariant: ProductVariant,
   ) {
-    return (variant.attributes ?? []).map(item => {
+    return (variant.attributes ?? []).map((item) => {
       const attribute = subCategory.attributes.find(
-        attr => attr.id === item.attributeId,
+        (attr) => attr.id === item.attributeId,
       );
 
       if (!attribute) {
@@ -231,17 +247,20 @@ export class ProductsService {
     }
 
     const sizeAttribute = subCategory.attributes?.find(
-      attribute => attribute.usage === AttributeUsage.VARIANT_SIZE,
+      (attribute) => attribute.usage === AttributeUsage.VARIANT_SIZE,
     );
     const colorAttribute = subCategory.attributes?.find(
-      attribute => attribute.usage === AttributeUsage.VARIANT_COLOR,
+      (attribute) => attribute.usage === AttributeUsage.VARIANT_COLOR,
     );
 
     for (const variant of variants) {
       const size = variant.size.trim();
       const color = variant.color?.trim();
 
-      if (sizeAttribute?.options?.length && !sizeAttribute.options.includes(size)) {
+      if (
+        sizeAttribute?.options?.length &&
+        !sizeAttribute.options.includes(size)
+      ) {
         throw new BadRequestException(
           `El talle ${size} no es valido para esta subcategoria`,
         );
@@ -264,7 +283,7 @@ export class ProductsService {
   ) {
     if (variants?.length) {
       const activeVariants = variants.filter(
-        variant => variant.isActive !== false,
+        (variant) => variant.isActive !== false,
       );
 
       if (activeVariants.length === 0) {
@@ -274,7 +293,7 @@ export class ProductsService {
       }
 
       return {
-        price: Math.min(...activeVariants.map(variant => variant.price)),
+        price: Math.min(...activeVariants.map((variant) => variant.price)),
         stock: activeVariants.reduce(
           (total, variant) => total + variant.stock,
           0,
@@ -292,7 +311,8 @@ export class ProductsService {
   }
 
   async create(createProductDto: CreateProductDto) {
-    let pickupAddress : UserAddress | null = null; 
+    let pickupAddress: UserAddress | null = null;
+    let brand: Brand | null = null;
     const subCategory = await this.subCategoryRepository.findOne({
       where: {
         id: createProductDto.subCategoryId,
@@ -306,6 +326,16 @@ export class ProductsService {
     if (!subCategory) {
       throw new NotFoundException('SubcategorÃ­a no encontrada');
     }
+
+    if (createProductDto.brandId) {
+      brand = await this.brandsRepository.findOne({
+        where: { id: createProductDto.brandId },
+      });
+
+      if (!brand) {
+        throw new NotFoundException('Marca no encontrada');
+      }
+    }
     subCategory.attributes = normalizeSubCategoryAttributesAppliesTo(
       subCategory.attributes,
     );
@@ -317,20 +347,20 @@ export class ProductsService {
       createProductDto.variants,
     );
 
-    if(createProductDto.pickupAddressId){
+    if (createProductDto.pickupAddressId) {
       pickupAddress = await this.userAddressRepository.findOne({
-        where : {
-          id : createProductDto.pickupAddressId, 
-          user : {
-            id : createProductDto.seller
-          }
-        }
-      })
-        if (!pickupAddress) {
-          throw new BadRequestException(
-              'La direcciÃ³n no existe o no pertenece al usuario',
-          );
-        }
+        where: {
+          id: createProductDto.pickupAddressId,
+          user: {
+            id: createProductDto.seller,
+          },
+        },
+      });
+      if (!pickupAddress) {
+        throw new BadRequestException(
+          'La direcciÃ³n no existe o no pertenece al usuario',
+        );
+      }
     }
     const product = this.productsRepository.create({
       title: createProductDto.title,
@@ -341,6 +371,7 @@ export class ProductsService {
       approvalStatus: ProductApprovalStatus.PENDING,
       category: subCategory.category,
       subCategory,
+      brand,
       seller: {
         id: createProductDto.seller,
       },
@@ -364,7 +395,8 @@ export class ProductsService {
           product: savedProduct,
         });
 
-        const savedVariant = await this.productVariantRepository.save(variantEntity);
+        const savedVariant =
+          await this.productVariantRepository.save(variantEntity);
         const attributeValues = this.buildVariantAttributeValues(
           subCategory,
           variant,
@@ -372,7 +404,9 @@ export class ProductsService {
         );
 
         if (attributeValues.length > 0) {
-          await this.productVariantAttributeValueRepository.save(attributeValues);
+          await this.productVariantAttributeValueRepository.save(
+            attributeValues,
+          );
         }
       }
     }
@@ -384,7 +418,7 @@ export class ProductsService {
         id: In(createProductDto.mediaIds),
       });
 
-      media.forEach(item => {
+      media.forEach((item) => {
         item.product = savedProduct;
       });
 
@@ -394,14 +428,14 @@ export class ProductsService {
     const sentAttributes = createProductDto.attributes ?? [];
 
     const requiredAttributes = subCategory.attributes.filter(
-      attribute =>
+      (attribute) =>
         attribute.required &&
         attribute.appliesTo === AttributeAppliesTo.PRODUCT,
     );
 
     for (const requiredAttribute of requiredAttributes) {
       const exists = sentAttributes.some(
-        item => item.attributeId === requiredAttribute.id,
+        (item) => item.attributeId === requiredAttribute.id,
       );
 
       if (!exists) {
@@ -412,9 +446,9 @@ export class ProductsService {
     }
 
     if (sentAttributes.length > 0) {
-      const values = sentAttributes.map(item => {
+      const values = sentAttributes.map((item) => {
         const attribute = subCategory.attributes.find(
-          attr => attr.id === item.attributeId,
+          (attr) => attr.id === item.attributeId,
         );
 
         if (!attribute) {
@@ -438,15 +472,17 @@ export class ProductsService {
     return this.findOne(savedProduct.id);
   }
 
-  async findAll() {
+  async findAll(brandId?: string) {
     const products = await this.productsRepository.find({
       where: {
         isActive: true,
         approvalStatus: ProductApprovalStatus.APPROVED,
+        ...(brandId ? { brand: { id: brandId } } : {}),
       },
       relations: {
         category: true,
         subCategory: true,
+        brand: true,
         seller: true,
         pickupAddress: true,
         media: true,
@@ -472,6 +508,7 @@ export class ProductsService {
       relations: {
         category: true,
         subCategory: true,
+        brand: true,
         seller: true,
         pickupAddress: true,
         media: true,
@@ -498,6 +535,7 @@ export class ProductsService {
       relations: {
         category: true,
         subCategory: true,
+        brand: true,
         seller: true,
         pickupAddress: true,
         media: true,
@@ -529,6 +567,7 @@ export class ProductsService {
       relations: {
         category: true,
         subCategory: true,
+        brand: true,
         seller: true,
         pickupAddress: true,
         media: true,
@@ -550,10 +589,7 @@ export class ProductsService {
     return this.normalizeProductResponse(product);
   }
 
-  async update(
-    id: string,
-    updateProductDto: UpdateProductDto,
-  ) {
+  async update(id: string, updateProductDto: UpdateProductDto) {
     const {
       seller,
       variants,
@@ -561,16 +597,18 @@ export class ProductsService {
       mediaIds,
       subCategoryId,
       pickupAddressId,
+      brandId,
       price,
       stock,
       ...rest
     } = updateProductDto;
-    const productTotals = variants === undefined
-      ? {
-          ...(price !== undefined ? { price } : {}),
-          ...(stock !== undefined ? { stock } : {}),
-        }
-      : this.resolveProductPriceAndStock(price, stock, variants);
+    const productTotals =
+      variants === undefined
+        ? {
+            ...(price !== undefined ? { price } : {}),
+            ...(stock !== undefined ? { stock } : {}),
+          }
+        : this.resolveProductPriceAndStock(price, stock, variants);
     const updateData = {
       ...rest,
       ...productTotals,
@@ -578,6 +616,22 @@ export class ProductsService {
       ...(subCategoryId ? { subCategory: { id: subCategoryId } } : {}),
       ...(pickupAddressId ? { pickupAddress: { id: pickupAddressId } } : {}),
     };
+
+    if (brandId !== undefined) {
+      if (brandId === null) {
+        Object.assign(updateData, { brand: null });
+      } else {
+        const brand = await this.brandsRepository.findOne({
+          where: { id: brandId },
+        });
+
+        if (!brand) {
+          throw new NotFoundException('Marca no encontrada');
+        }
+
+        Object.assign(updateData, { brand });
+      }
+    }
 
     let productWithSubCategory: Product | null = null;
 
@@ -603,10 +657,7 @@ export class ProductsService {
           productWithSubCategory.subCategory.attributes,
         );
 
-      this.validateVariantOptions(
-        productWithSubCategory.subCategory,
-        variants,
-      );
+      this.validateVariantOptions(productWithSubCategory.subCategory, variants);
 
       for (const variant of variants) {
         this.validateRequiredVariantAttributes(
@@ -619,7 +670,6 @@ export class ProductsService {
     await this.productsRepository.update(id, updateData);
 
     if (variants !== undefined && productWithSubCategory) {
-
       await this.productVariantRepository.delete({
         product: { id },
       });
@@ -636,7 +686,8 @@ export class ProductsService {
             product: productWithSubCategory,
           });
 
-          const savedVariant = await this.productVariantRepository.save(nextVariant);
+          const savedVariant =
+            await this.productVariantRepository.save(nextVariant);
           const attributeValues = this.buildVariantAttributeValues(
             productWithSubCategory.subCategory!,
             variant,
@@ -644,7 +695,9 @@ export class ProductsService {
           );
 
           if (attributeValues.length > 0) {
-            await this.productVariantAttributeValueRepository.save(attributeValues);
+            await this.productVariantAttributeValueRepository.save(
+              attributeValues,
+            );
           }
         }
       }
@@ -697,10 +750,7 @@ export class ProductsService {
     return this.findOne(id);
   }
 
-  async uploadProductMedia(
-    productId: string,
-    files: Express.Multer.File[],
-  ) {
+  async uploadProductMedia(productId: string, files: Express.Multer.File[]) {
     const product = await this.productsRepository.findOne({
       where: { id: productId },
     });
@@ -709,7 +759,7 @@ export class ProductsService {
       throw new NotFoundException('Producto no encontrado');
     }
 
-    const mediaItems : ProductMedia[] = [];
+    const mediaItems: ProductMedia[] = [];
 
     for (const file of files) {
       const mediaType = file.mimetype.startsWith('video/')
@@ -735,15 +785,16 @@ export class ProductsService {
     return this.productMediaRepository.save(mediaItems);
   }
 
-  async findMyProducts(userId : string) {
+  async findMyProducts(userId: string) {
     const products = await this.productsRepository.find({
-      where : {
-        seller : {
-          id : userId,
-        }
-      }, 
-      relations : {
+      where: {
+        seller: {
+          id: userId,
+        },
+      },
+      relations: {
         seller: true,
+        brand: true,
         pickupAddress: true,
         variants: {
           attributes: {
@@ -751,44 +802,43 @@ export class ProductsService {
           },
         },
       },
-      order : {
-        createdAt : 'DESC', 
-      }
-    })
+      order: {
+        createdAt: 'DESC',
+      },
+    });
 
     return this.normalizeProductResponse(products);
   }
 
   async findFeatured() {
     const products = await this.productsRepository.find({
-      where : {
-        isActive : true,
+      where: {
+        isActive: true,
         approvalStatus: ProductApprovalStatus.APPROVED,
-        seller : {
-          plan : {
-            isFeatured : true
-          }
-        }
-      }, 
-      relations : {
-        seller : {
-          plan : true
-        }, 
-        category : true, 
-        media : true,
+        seller: {
+          plan: {
+            isFeatured: true,
+          },
+        },
+      },
+      relations: {
+        seller: {
+          plan: true,
+        },
+        category: true,
+        brand: true,
+        media: true,
         variants: {
           attributes: {
             attribute: true,
           },
         },
-      }, 
-      order : {
-        createdAt : 'DESC'
-      }
+      },
+      order: {
+        createdAt: 'DESC',
+      },
     });
 
     return this.normalizeProductResponse(products);
   }
 }
-
-

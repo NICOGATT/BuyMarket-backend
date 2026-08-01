@@ -83,6 +83,10 @@ export class CreateProductDto {
   @IsUUID()
   subCategoryId!: string;
 
+  @IsUUID()
+  @IsOptional()
+  brandId?: string | null;
+
   @IsArray()
   @IsUUID('4', { each: true })
   @IsOptional()

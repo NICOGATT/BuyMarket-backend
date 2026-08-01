@@ -91,7 +91,7 @@ describe('ProductsController', () => {
 
       const result = await controller.findAll();
 
-      expect(service.findAll).toHaveBeenCalledWith();
+      expect(service.findAll).toHaveBeenCalledWith(undefined);
       expect(result).toEqual([product]);
     });
 
@@ -100,7 +100,7 @@ describe('ProductsController', () => {
 
       const result = await controller.findAll();
 
-      expect(service.findAll).toHaveBeenCalledWith();
+      expect(service.findAll).toHaveBeenCalledWith(undefined);
       expect(result).toEqual([]);
     });
 
@@ -109,7 +109,16 @@ describe('ProductsController', () => {
       jest.spyOn(service, 'findAll').mockRejectedValue(error);
 
       await expect(controller.findAll()).rejects.toThrow(error);
-      expect(service.findAll).toHaveBeenCalledWith();
+      expect(service.findAll).toHaveBeenCalledWith(undefined);
+    });
+
+    it('should forward the brand filter', async () => {
+      const brandId = '4f53b30d-a566-4b4e-a103-b1b3482c0849';
+      jest.spyOn(service, 'findAll').mockResolvedValue([product]);
+
+      await controller.findAll({ brandId });
+
+      expect(service.findAll).toHaveBeenCalledWith(brandId);
     });
   });
 

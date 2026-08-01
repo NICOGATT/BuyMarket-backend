@@ -28,6 +28,7 @@ import { ShipmentsModule } from './modules/shipments/shipments.module';
 import { MailModule } from './modules/mail/mail.module';
 import { UserPaymentMethodsModule } from './modules/user-payment-methods/user-payment-methods.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { BrandsModule } from './modules/brands/brands.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -78,6 +79,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     MailModule,
     UserPaymentMethodsModule,
     NotificationsModule,
+    BrandsModule,
   ],
 })
 export class AppModule {}
