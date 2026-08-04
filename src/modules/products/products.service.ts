@@ -30,6 +30,7 @@ import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { Brand } from '../brands/entities/brand.entity';
 import { ProductResult } from './dto/product-result.dto';
+import { ColorsService } from '../colors/colors.service';
 
 type ProductSearchRow = Omit<ProductResult, 'stock' | 'price' | 'currency'> & {
   stock: number | string;
@@ -59,6 +60,7 @@ export class ProductsService {
     private readonly brandsRepository: Repository<Brand>,
 
     private readonly cloudinaryService: CloudinaryService,
+    private readonly colorsService: ColorsService,
   ) {}
 
   private removeSellerPassword<T extends Product | Product[]>(products: T): T {
@@ -255,13 +257,8 @@ export class ProductsService {
     const sizeAttribute = subCategory.attributes?.find(
       (attribute) => attribute.usage === AttributeUsage.VARIANT_SIZE,
     );
-    const colorAttribute = subCategory.attributes?.find(
-      (attribute) => attribute.usage === AttributeUsage.VARIANT_COLOR,
-    );
-
     for (const variant of variants) {
       const size = variant.size.trim();
-      const color = variant.color?.trim();
 
       if (
         sizeAttribute?.options?.length &&
@@ -271,15 +268,39 @@ export class ProductsService {
           `El talle ${size} no es valido para esta subcategoria`,
         );
       }
-
-      if (colorAttribute?.options?.length) {
-        if (!color || !colorAttribute.options.includes(color)) {
-          throw new BadRequestException(
-            `El color ${color ?? ''} no es valido para esta subcategoria`,
-          );
-        }
-      }
     }
+  }
+
+  private async normalizeVariantColors(
+    variants?: CreateProductDto['variants'],
+  ): Promise<CreateProductDto['variants']> {
+    if (variants === undefined) {
+      return undefined;
+    }
+
+    const variantsWithHex = variants.filter((variant) => variant.colorHex);
+    const recommendations = await this.colorsService.recommendMany(
+      variantsWithHex.map((variant) => variant.colorHex!),
+    );
+    let recommendationIndex = 0;
+
+    return variants.map((variant) => {
+      if (variant.colorHex) {
+        const recommendation = recommendations[recommendationIndex++];
+
+        return {
+          ...variant,
+          color: recommendation.color.name,
+          colorHex: recommendation.inputHex,
+        };
+      }
+
+      return {
+        ...variant,
+        color: variant.color?.trim() || undefined,
+        colorHex: undefined,
+      };
+    });
   }
 
   private resolveProductPriceAndStock(
@@ -346,11 +367,14 @@ export class ProductsService {
       subCategory.attributes,
     );
 
-    this.validateVariantOptions(subCategory, createProductDto.variants);
+    const normalizedVariants = await this.normalizeVariantColors(
+      createProductDto.variants,
+    );
+    this.validateVariantOptions(subCategory, normalizedVariants);
     const productTotals = this.resolveProductPriceAndStock(
       createProductDto.price,
       createProductDto.stock,
-      createProductDto.variants,
+      normalizedVariants,
     );
 
     if (createProductDto.pickupAddressId) {
@@ -387,8 +411,8 @@ export class ProductsService {
 
     const savedProduct = await this.productsRepository.save(product);
 
-    if (createProductDto.variants?.length) {
-      for (const variant of createProductDto.variants) {
+    if (normalizedVariants?.length) {
+      for (const variant of normalizedVariants) {
         this.validateRequiredVariantAttributes(subCategory, variant);
 
         const variantEntity = this.productVariantRepository.create({
@@ -689,13 +713,14 @@ export class ProductsService {
       stock,
       ...rest
     } = updateProductDto;
+    const normalizedVariants = await this.normalizeVariantColors(variants);
     const productTotals =
-      variants === undefined
+      normalizedVariants === undefined
         ? {
             ...(price !== undefined ? { price } : {}),
             ...(stock !== undefined ? { stock } : {}),
           }
-        : this.resolveProductPriceAndStock(price, stock, variants);
+        : this.resolveProductPriceAndStock(price, stock, normalizedVariants);
     const updateData = {
       ...rest,
       ...productTotals,
@@ -722,7 +747,7 @@ export class ProductsService {
 
     let productWithSubCategory: Product | null = null;
 
-    if (variants !== undefined) {
+    if (normalizedVariants !== undefined) {
       productWithSubCategory = await this.productsRepository.findOne({
         where: { id },
         relations: {
@@ -744,9 +769,12 @@ export class ProductsService {
           productWithSubCategory.subCategory.attributes,
         );
 
-      this.validateVariantOptions(productWithSubCategory.subCategory, variants);
+      this.validateVariantOptions(
+        productWithSubCategory.subCategory,
+        normalizedVariants,
+      );
 
-      for (const variant of variants) {
+      for (const variant of normalizedVariants) {
         this.validateRequiredVariantAttributes(
           productWithSubCategory.subCategory,
           variant,
@@ -756,13 +784,13 @@ export class ProductsService {
 
     await this.productsRepository.update(id, updateData);
 
-    if (variants !== undefined && productWithSubCategory) {
+    if (normalizedVariants !== undefined && productWithSubCategory) {
       await this.productVariantRepository.delete({
         product: { id },
       });
 
-      if (variants.length > 0) {
-        for (const variant of variants) {
+      if (normalizedVariants.length > 0) {
+        for (const variant of normalizedVariants) {
           const nextVariant = this.productVariantRepository.create({
             size: variant.size.trim(),
             color: variant.color?.trim() || null,

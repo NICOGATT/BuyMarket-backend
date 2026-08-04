@@ -16,6 +16,7 @@ import { UserAddress } from '../user-address/entities/user-address.entity';
 
 import { CloudinaryModule } from '../../cloudinary/cloudinary.module';
 import { Brand } from '../brands/entities/brand.entity';
+import { ColorsModule } from '../colors/colors.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -31,6 +32,7 @@ import { Brand } from '../brands/entities/brand.entity';
       Brand,
     ]),
     CloudinaryModule,
+    ColorsModule,
   ],
   controllers: [ProductsController],
   providers: [ProductsService],

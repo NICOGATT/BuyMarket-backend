@@ -1,5 +1,6 @@
 ﻿import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Brackets, ObjectLiteral, Repository } from 'typeorm';
 
@@ -22,6 +23,7 @@ import { ProductsService } from './products.service';
 import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { Brand } from '../brands/entities/brand.entity';
+import { ColorsService } from '../colors/colors.service';
 
 type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
@@ -52,6 +54,7 @@ describe('ProductsService', () => {
   let subCategoryRepository: MockRepository<SubCategory>;
   let userAddressRepository: MockRepository<UserAddress>;
   let brandRepository: MockRepository<Brand>;
+  let colorsService: { recommendMany: jest.Mock };
 
   const category = {
     id: '8ce13fc5-7868-499e-bc30-9d62a63c8b13',
@@ -126,6 +129,16 @@ describe('ProductsService', () => {
     subCategoryRepository = createMockRepository<SubCategory>();
     userAddressRepository = createMockRepository<UserAddress>();
     brandRepository = createMockRepository<Brand>();
+    colorsService = {
+      recommendMany: jest.fn().mockImplementation((hexes: string[]) =>
+        Promise.resolve(
+          hexes.map((hex) => ({
+            inputHex: hex.toUpperCase(),
+            color: { id: 'black', name: 'Negro', hex: '#000000' },
+          })),
+        ),
+      ),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -171,6 +184,10 @@ describe('ProductsService', () => {
           useValue: {
             uploadFile: jest.fn(),
           },
+        },
+        {
+          provide: ColorsService,
+          useValue: colorsService,
         },
       ],
     }).compile();
@@ -524,6 +541,74 @@ describe('ProductsService', () => {
         }),
       ).rejects.toThrow('El talle XL no es valido para esta subcategoria');
       expect(productRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('acepta cualquier HEX aunque el nombre no figure en options', async () => {
+      const colorAttribute = {
+        id: 'color-attribute',
+        name: 'Color',
+        type: AttributeType.SELECT,
+        usage: AttributeUsage.VARIANT_COLOR,
+        appliesTo: AttributeAppliesTo.VARIANT,
+        required: true,
+        options: ['Negro', 'Blanco'],
+      };
+      subCategoryRepository.findOne?.mockResolvedValue({
+        ...subCategory,
+        attributes: [colorAttribute],
+      });
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productRepository.findOne?.mockResolvedValue(product);
+      productVariantRepository.create?.mockImplementation((data) => data);
+      colorsService.recommendMany.mockResolvedValue([
+        {
+          inputHex: '#FE0101',
+          color: { id: 'red', name: 'Rojo', hex: '#FF0000' },
+        },
+      ]);
+
+      await service.create({
+        ...createProductDto,
+        variants: [
+          {
+            size: 'M',
+            color: 'inventado',
+            colorHex: '#fe0101',
+            price: 1200,
+            stock: 2,
+          },
+        ],
+      });
+
+      expect(productVariantRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          color: 'Rojo',
+          colorHex: '#FE0101',
+        }),
+      );
+    });
+
+    it('no escribe el producto si no hay catalogo para resolver el HEX', async () => {
+      subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+      colorsService.recommendMany.mockRejectedValue(
+        new ServiceUnavailableException('No hay colores configurados'),
+      );
+
+      await expect(
+        service.create({
+          ...createProductDto,
+          variants: [
+            {
+              size: 'M',
+              colorHex: '#FF0000',
+              price: 1200,
+              stock: 2,
+            },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(productRepository.save).not.toHaveBeenCalled();
     });
 
     it('acepta atributos descriptivos y variantes validas', async () => {
@@ -1130,6 +1215,44 @@ describe('ProductsService', () => {
         product: { id: productId },
       });
       expect(result).toEqual(updatedProduct);
+    });
+
+    it('reemplaza el nombre enviado por la recomendacion al actualizar', async () => {
+      const productWithSubCategory = {
+        ...product,
+        subCategory,
+      } as Product;
+      const variants = [
+        {
+          size: 'M',
+          color: 'nombre libre',
+          colorHex: '#fe0101',
+          price: 1300,
+          stock: 2,
+        },
+      ];
+      colorsService.recommendMany.mockResolvedValue([
+        {
+          inputHex: '#FE0101',
+          color: { id: 'red', name: 'Rojo', hex: '#FF0000' },
+        },
+      ]);
+      productRepository.findOne
+        ?.mockResolvedValueOnce(productWithSubCategory)
+        .mockResolvedValueOnce(productWithSubCategory);
+      productVariantRepository.create?.mockImplementation((data) => data);
+      productVariantRepository.save?.mockImplementation((data) =>
+        Promise.resolve(data),
+      );
+
+      await service.update(productId, { variants });
+
+      expect(productVariantRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          color: 'Rojo',
+          colorHex: '#FE0101',
+        }),
+      );
     });
 
     it('exige precio y stock al eliminar todas las variantes', async () => {
