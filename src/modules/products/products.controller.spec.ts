@@ -41,6 +41,7 @@ describe('ProductsController', () => {
     const productsServiceMock = {
       create: jest.fn(),
       findAll: jest.fn(),
+      search: jest.fn(),
       findOne: jest.fn(),
       findOnePublic: jest.fn(),
       update: jest.fn(),
@@ -147,6 +148,30 @@ describe('ProductsController', () => {
 
       await expect(controller.findOne(productId)).rejects.toThrow(error);
       expect(service.findOnePublic).toHaveBeenCalledWith(productId);
+    });
+  });
+
+  describe('search', () => {
+    it('devuelve directamente los productos compactos del service', async () => {
+      const results = [
+        {
+          productId: '4d2bfba0-173c-4d60-8e5b-aee88ac25f77',
+          variantId: 'b180ff60-e071-48c2-85d3-4ed8bf4a4cbb',
+          name: 'Zapatillas running',
+          brand: 'Nike',
+          color: 'Rojo',
+          size: '42',
+          stock: 3,
+          price: 125000,
+          currency: 'ARS' as const,
+        },
+      ];
+      jest.spyOn(service, 'search').mockResolvedValue(results);
+
+      const result = await controller.search({ q: 'Nike roja', limit: 5 });
+
+      expect(service.search).toHaveBeenCalledWith('Nike roja', 5);
+      expect(result).toEqual(results);
     });
   });
 

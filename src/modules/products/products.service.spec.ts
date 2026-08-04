@@ -1,7 +1,7 @@
 ﻿import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ObjectLiteral, Repository } from 'typeorm';
+import { Brackets, ObjectLiteral, Repository } from 'typeorm';
 
 import { Category } from '../categories/entities/category.entity';
 import {
@@ -38,6 +38,7 @@ const createMockRepository = <
   save: jest.fn(),
   update: jest.fn(),
   delete: jest.fn(),
+  createQueryBuilder: jest.fn(),
 });
 
 describe('ProductsService', () => {
@@ -811,6 +812,163 @@ describe('ProductsService', () => {
           relations: expect.objectContaining({ brand: true }),
         }),
       );
+    });
+  });
+
+  describe('search', () => {
+    const createQueryBuilderMock = (rows: unknown[]) => {
+      const queryBuilder = {
+        leftJoin: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue(rows),
+      };
+
+      productRepository.createQueryBuilder?.mockReturnValue(queryBuilder);
+
+      return queryBuilder;
+    };
+
+    it('devuelve solo el contrato compacto y convierte numeros de PostgreSQL', async () => {
+      const queryBuilder = createQueryBuilderMock([
+        {
+          productId,
+          variantId: 'b180ff60-e071-48c2-85d3-4ed8bf4a4cbb',
+          name: 'Zapatillas running',
+          brand: 'Nike',
+          color: 'Rojo',
+          size: '42',
+          stock: '3',
+          price: '125000.50',
+        },
+        {
+          productId: '3497f5f3-d47a-48c3-8938-e5312bf0f338',
+          variantId: null,
+          name: 'Medias deportivas',
+          brand: null,
+          color: null,
+          size: null,
+          stock: 8,
+          price: 9000,
+        },
+      ]);
+
+      const result = await service.search('deportivas', 5);
+
+      expect(productRepository.createQueryBuilder).toHaveBeenCalledWith(
+        'product',
+      );
+      expect(queryBuilder.limit).toHaveBeenCalledWith(5);
+      expect(result).toEqual([
+        {
+          productId,
+          variantId: 'b180ff60-e071-48c2-85d3-4ed8bf4a4cbb',
+          name: 'Zapatillas running',
+          brand: 'Nike',
+          color: 'Rojo',
+          size: '42',
+          stock: 3,
+          price: 125000.5,
+          currency: 'ARS',
+        },
+        {
+          productId: '3497f5f3-d47a-48c3-8938-e5312bf0f338',
+          variantId: null,
+          name: 'Medias deportivas',
+          brand: null,
+          color: null,
+          size: null,
+          stock: 8,
+          price: 9000,
+          currency: 'ARS',
+        },
+      ]);
+      expect(Object.keys(result[0])).toEqual([
+        'productId',
+        'variantId',
+        'name',
+        'brand',
+        'color',
+        'size',
+        'stock',
+        'price',
+        'currency',
+      ]);
+    });
+
+    it('aplica cada palabra como una condicion de busqueda independiente', async () => {
+      const queryBuilder = createQueryBuilderMock([]);
+
+      await service.search('  Nike rojo  ');
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledTimes(4);
+
+      const firstTerm = queryBuilder.andWhere.mock.calls[2][0] as Brackets;
+      const secondTerm = queryBuilder.andWhere.mock.calls[3][0] as Brackets;
+      const firstTermQuery = {
+        where: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+      };
+      const secondTermQuery = {
+        where: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+      };
+
+      firstTerm.whereFactory(firstTermQuery as never);
+      secondTerm.whereFactory(secondTermQuery as never);
+
+      expect(firstTermQuery.where).toHaveBeenCalledWith(
+        expect.stringContaining('product.title ILIKE :searchTerm0'),
+        { searchTerm0: '%Nike%' },
+      );
+      expect(firstTermQuery.orWhere).toHaveBeenCalledTimes(3);
+      expect(secondTermQuery.where).toHaveBeenCalledWith(
+        expect.stringContaining('product.title ILIKE :searchTerm1'),
+        { searchTerm1: '%rojo%' },
+      );
+    });
+
+    it('limita la consulta a productos y variantes activos con stock', async () => {
+      const queryBuilder = createQueryBuilderMock([]);
+
+      await service.search('zapatillas');
+
+      expect(queryBuilder.where).toHaveBeenCalledWith(
+        'product.isActive = :isActive',
+        { isActive: true },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'product.approvalStatus = :approvalStatus',
+        { approvalStatus: ProductApprovalStatus.APPROVED },
+      );
+
+      const availability = queryBuilder.andWhere.mock.calls[1][0] as Brackets;
+      const availabilityQuery = {
+        where: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+      };
+
+      availability.whereFactory(availabilityQuery as never);
+
+      expect(availabilityQuery.where).toHaveBeenCalledWith(
+        'variant.id IS NULL AND product.stock > 0',
+      );
+      expect(availabilityQuery.orWhere).toHaveBeenCalledWith(
+        'variant.id IS NOT NULL AND variant.isActive = :variantIsActive AND variant.stock > 0',
+        { variantIsActive: true },
+      );
+    });
+
+    it('rechaza consultas vacias antes de acceder a la base', async () => {
+      await expect(service.search('   ')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(productRepository.createQueryBuilder).not.toHaveBeenCalled();
     });
   });
 

@@ -24,6 +24,8 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../users/entity/user.entity';
 import { ListProductsDto } from './dto/list-products.dto';
+import { SearchProductsDto } from './dto/search-products.dto';
+import { ProductResult } from './dto/product-result.dto';
 
 @Controller('products')
 export class ProductsController {
@@ -42,6 +44,11 @@ export class ProductsController {
   @Get('featured')
   findFeatured() {
     return this.productsService.findFeatured();
+  }
+
+  @Get('search')
+  search(@Query() query: SearchProductsDto): Promise<ProductResult[]> {
+    return this.productsService.search(query.q, query.limit);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

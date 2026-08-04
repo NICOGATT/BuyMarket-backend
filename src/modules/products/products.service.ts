@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 
 import { Product, ProductApprovalStatus } from './entity/product.entity';
 
@@ -29,6 +29,12 @@ import { normalizeSubCategoryAttributesAppliesTo } from '../subcategoria/subcate
 import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { Brand } from '../brands/entities/brand.entity';
+import { ProductResult } from './dto/product-result.dto';
+
+type ProductSearchRow = Omit<ProductResult, 'stock' | 'price' | 'currency'> & {
+  stock: number | string;
+  price: number | string;
+};
 
 @Injectable()
 export class ProductsService {
@@ -501,6 +507,87 @@ export class ProductsService {
     });
 
     return this.normalizeProductResponse(products);
+  }
+
+  async search(q: string, limit = 10): Promise<ProductResult[]> {
+    const terms = q
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+    if (terms.length === 0) {
+      throw new BadRequestException('La busqueda no puede estar vacia');
+    }
+
+    const query = this.productsRepository
+      .createQueryBuilder('product')
+      .leftJoin('product.brand', 'brand')
+      .leftJoin('product.variants', 'variant')
+      .select('product.id', 'productId')
+      .addSelect('variant.id', 'variantId')
+      .addSelect('product.title', 'name')
+      .addSelect('brand.name', 'brand')
+      .addSelect('variant.color', 'color')
+      .addSelect('variant.size', 'size')
+      .addSelect('COALESCE(variant.stock, product.stock)', 'stock')
+      .addSelect('COALESCE(variant.price, product.price)', 'price')
+      .where('product.isActive = :isActive', { isActive: true })
+      .andWhere('product.approvalStatus = :approvalStatus', {
+        approvalStatus: ProductApprovalStatus.APPROVED,
+      })
+      .andWhere(
+        new Brackets((availabilityQuery) => {
+          availabilityQuery
+            .where('variant.id IS NULL AND product.stock > 0')
+            .orWhere(
+              'variant.id IS NOT NULL AND variant.isActive = :variantIsActive AND variant.stock > 0',
+              { variantIsActive: true },
+            );
+        }),
+      );
+
+    terms.forEach((term, index) => {
+      const parameterName = `searchTerm${index}`;
+      const escapedTerm = term.replace(/[\\%_]/g, '\\$&');
+      const pattern = `%${escapedTerm}%`;
+
+      query.andWhere(
+        new Brackets((termQuery) => {
+          termQuery
+            .where(
+              `product.title ILIKE :${parameterName} ESCAPE '\\'`,
+              { [parameterName]: pattern },
+            )
+            .orWhere(
+              `COALESCE(brand.name, '') ILIKE :${parameterName} ESCAPE '\\'`,
+            )
+            .orWhere(
+              `COALESCE(variant.color, '') ILIKE :${parameterName} ESCAPE '\\'`,
+            )
+            .orWhere(
+              `COALESCE(variant.size, '') ILIKE :${parameterName} ESCAPE '\\'`,
+            );
+        }),
+      );
+    });
+
+    const rows = await query
+      .orderBy('product.createdAt', 'DESC')
+      .addOrderBy('variant.createdAt', 'ASC')
+      .limit(limit)
+      .getRawMany<ProductSearchRow>();
+
+    return rows.map((row) => ({
+      productId: row.productId,
+      variantId: row.variantId ?? null,
+      name: row.name,
+      brand: row.brand ?? null,
+      color: row.color ?? null,
+      size: row.size ?? null,
+      stock: Number(row.stock),
+      price: Number(row.price),
+      currency: 'ARS',
+    }));
   }
 
   async findAllForAdmin() {
