@@ -2,7 +2,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Brackets, ObjectLiteral, Repository } from 'typeorm';
+import { Brackets, DataSource, ObjectLiteral, Repository } from 'typeorm';
 
 import { Category } from '../categories/entities/category.entity';
 import {
@@ -54,7 +54,8 @@ describe('ProductsService', () => {
   let subCategoryRepository: MockRepository<SubCategory>;
   let userAddressRepository: MockRepository<UserAddress>;
   let brandRepository: MockRepository<Brand>;
-  let colorsService: { recommendMany: jest.Mock };
+  let colorsService: { recommendMany: jest.Mock; findByNames: jest.Mock };
+  let dataSource: { transaction: jest.Mock };
 
   const category = {
     id: '8ce13fc5-7868-499e-bc30-9d62a63c8b13',
@@ -138,6 +139,21 @@ describe('ProductsService', () => {
           })),
         ),
       ),
+      findByNames: jest.fn().mockResolvedValue(new Map()),
+    };
+    dataSource = {
+      transaction: jest.fn(async (callback) =>
+        callback({
+          getRepository: jest.fn((entity) => {
+            if (entity === Product) return productRepository;
+            if (entity === ProductVariant) return productVariantRepository;
+            if (entity === ProductVariantAttributeValue) {
+              return productVariantAttributeValueRepository;
+            }
+            throw new Error(`Repositorio transaccional no mockeado`);
+          }),
+        }),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -188,6 +204,10 @@ describe('ProductsService', () => {
         {
           provide: ColorsService,
           useValue: colorsService,
+        },
+        {
+          provide: DataSource,
+          useValue: dataSource,
         },
       ],
     }).compile();
@@ -680,6 +700,11 @@ describe('ProductsService', () => {
         size: 'M',
         color: 'Negro',
         colorHex: '#000000',
+        catalogColor: {
+          id: 'black',
+          name: 'Negro',
+          hex: '#000000',
+        },
         price: 1200,
         stock: 2,
         isActive: true,
@@ -735,6 +760,11 @@ describe('ProductsService', () => {
         size: 'M',
         color: 'Negro',
         colorHex: '#000000',
+        catalogColor: {
+          id: 'black',
+          name: 'Negro',
+          hex: '#000000',
+        },
         price: 1200,
         stock: 3,
         isActive: true,
@@ -746,6 +776,11 @@ describe('ProductsService', () => {
           size: 'M',
           color: 'Negro',
           colorHex: '#000000',
+          catalogColor: {
+            id: 'black',
+            name: 'Negro',
+            hex: '#000000',
+          },
           price: 1200,
           stock: 3,
           isActive: true,
@@ -758,6 +793,7 @@ describe('ProductsService', () => {
           size: 'XL',
           color: null,
           colorHex: null,
+          catalogColor: null,
           price: 1500,
           stock: 2,
           isActive: false,
@@ -1211,10 +1247,162 @@ describe('ProductsService', () => {
         price: 1300,
         stock: 6,
       });
-      expect(productVariantRepository.delete).toHaveBeenCalledWith({
-        product: { id: productId },
-      });
+      expect(productVariantRepository.delete).not.toHaveBeenCalled();
       expect(result).toEqual(updatedProduct);
+    });
+
+    it('actualiza variantes por id, crea nuevas y desactiva las omitidas', async () => {
+      const keptId = '11111111-1111-4111-8111-111111111111';
+      const omittedId = '22222222-2222-4222-8222-222222222222';
+      const newId = '33333333-3333-4333-8333-333333333333';
+      const keptVariant = {
+        id: keptId,
+        size: 'S',
+        color: 'Negro',
+        colorHex: '#000000',
+        price: 1300,
+        stock: 2,
+        isActive: true,
+      } as ProductVariant;
+      const omittedVariant = {
+        id: omittedId,
+        size: 'M',
+        color: 'Blanco',
+        colorHex: '#FFFFFF',
+        price: 1400,
+        stock: 5,
+        isActive: true,
+      } as ProductVariant;
+      const productWithVariants = {
+        ...product,
+        subCategory,
+        variants: [keptVariant, omittedVariant],
+      } as Product;
+
+      productRepository.findOne
+        ?.mockResolvedValueOnce(productWithVariants)
+        .mockResolvedValueOnce(productWithVariants);
+      productVariantRepository.create?.mockImplementation((data) => ({
+        ...data,
+        id: newId,
+      }));
+      productVariantRepository.save?.mockImplementation((data) =>
+        Promise.resolve(data),
+      );
+
+      await service.update(productId, {
+        variants: [
+          {
+            id: keptId,
+            size: 'S',
+            colorHex: '#010101',
+            price: 1250,
+            stock: 7,
+          },
+          {
+            size: 'L',
+            color: 'Azul',
+            price: 1500,
+            stock: 3,
+          },
+        ],
+      });
+
+      expect(keptVariant).toEqual(
+        expect.objectContaining({
+          id: keptId,
+          color: 'Negro',
+          colorHex: '#010101',
+          price: 1250,
+          stock: 7,
+          isActive: true,
+        }),
+      );
+      expect(omittedVariant).toEqual(
+        expect.objectContaining({ isActive: false, stock: 0 }),
+      );
+      expect(productVariantRepository.save).toHaveBeenCalledWith([
+        omittedVariant,
+      ]);
+      expect(productVariantRepository.create).toHaveBeenCalledWith({
+        product: productWithVariants,
+      });
+      expect(productVariantRepository.delete).not.toHaveBeenCalled();
+    });
+
+    it('rechaza IDs de variantes repetidos antes de modificar el producto', async () => {
+      const variantId = '11111111-1111-4111-8111-111111111111';
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        subCategory,
+        variants: [
+          {
+            id: variantId,
+            size: 'S',
+            price: 1000,
+            stock: 2,
+            isActive: true,
+          },
+        ],
+      });
+
+      await expect(
+        service.update(productId, {
+          variants: [
+            { id: variantId, size: 'S', price: 1000, stock: 2 },
+            { id: variantId, size: 'M', price: 1100, stock: 3 },
+          ],
+        }),
+      ).rejects.toThrow('Hay IDs de variantes repetidos');
+
+      expect(productRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una variante que no pertenece al producto', async () => {
+      const foreignId = '44444444-4444-4444-8444-444444444444';
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        subCategory,
+        variants: [],
+      });
+
+      await expect(
+        service.update(productId, {
+          variants: [{ id: foreignId, size: 'S', price: 1000, stock: 2 }],
+        }),
+      ).rejects.toThrow(`La variante ${foreignId} no pertenece`);
+
+      expect(productRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('propaga el fallo transaccional y no devuelve un producto parcial', async () => {
+      const variantId = '11111111-1111-4111-8111-111111111111';
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        subCategory,
+        variants: [
+          {
+            id: variantId,
+            size: 'S',
+            price: 1000,
+            stock: 2,
+            isActive: true,
+          },
+        ],
+      });
+      productRepository.update?.mockResolvedValue({ affected: 1 });
+      productVariantRepository.save?.mockRejectedValue(
+        new Error('fallo al guardar variante'),
+      );
+
+      await expect(
+        service.update(productId, {
+          variants: [{ id: variantId, size: 'S', price: 1200, stock: 4 }],
+        }),
+      ).rejects.toThrow('fallo al guardar variante');
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(productRepository.findOne).toHaveBeenCalledTimes(1);
     });
 
     it('reemplaza el nombre enviado por la recomendacion al actualizar', async () => {

@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
   ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
@@ -10,6 +11,7 @@ import {
 
 import { Product } from './product.entity';
 import { ProductVariantAttributeValue } from './product-variant-attribute-value.entity';
+import { Color } from '../../colors/entities/color.entity';
 
 @Entity('product_variants')
 export class ProductVariant {
@@ -24,6 +26,17 @@ export class ProductVariant {
 
   @Column({ type: 'varchar', length: 7, nullable: true })
   colorHex?: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  catalogColorId?: string | null;
+
+  @ManyToOne(() => Color, (color) => color.variants, {
+    nullable: true,
+    onDelete: 'SET NULL',
+    eager: true,
+  })
+  @JoinColumn({ name: 'catalogColorId' })
+  catalogColor?: Color | null;
 
   @Column({
     type: 'decimal',
@@ -44,13 +57,9 @@ export class ProductVariant {
   })
   product!: Product;
 
-  @OneToMany(
-    () => ProductVariantAttributeValue,
-    value => value.variant,
-    {
-      cascade: true,
-    },
-  )
+  @OneToMany(() => ProductVariantAttributeValue, (value) => value.variant, {
+    cascade: true,
+  })
   attributes!: ProductVariantAttributeValue[];
 
   @CreateDateColumn()

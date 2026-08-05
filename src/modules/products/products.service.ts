@@ -4,12 +4,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, DataSource, In, Repository } from 'typeorm';
 
 import { Product, ProductApprovalStatus } from './entity/product.entity';
 
 import { CreateProductDto } from './dto/create-product.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
+import {
+  UpdateProductDto,
+  UpdateProductVariantDto,
+} from './dto/update-product.dto';
 import { Category } from '../categories/entities/category.entity';
 import {
   ProductMedia,
@@ -31,10 +34,17 @@ import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { Brand } from '../brands/entities/brand.entity';
 import { ProductResult } from './dto/product-result.dto';
 import { ColorsService } from '../colors/colors.service';
+import { Color } from '../colors/entities/color.entity';
+import { CreateProductVariantDto } from './dto/create-product.dto';
 
 type ProductSearchRow = Omit<ProductResult, 'stock' | 'price' | 'currency'> & {
   stock: number | string;
   price: number | string;
+};
+
+type VariantInput = CreateProductVariantDto | UpdateProductVariantDto;
+type NormalizedVariantInput = VariantInput & {
+  catalogColor: Color | null;
 };
 
 @Injectable()
@@ -61,6 +71,7 @@ export class ProductsService {
 
     private readonly cloudinaryService: CloudinaryService,
     private readonly colorsService: ColorsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   private removeSellerPassword<T extends Product | Product[]>(products: T): T {
@@ -117,6 +128,7 @@ export class ProductsService {
 
     productList.forEach((product) => {
       (product.variants ?? []).forEach((variant) => {
+        variant.color = variant.catalogColor?.name ?? variant.color;
         const attributes = (variant.attributes ?? []).map((value) => ({
           id: value.id,
           attributeId: value.attribute?.id,
@@ -224,6 +236,7 @@ export class ProductsService {
     subCategory: SubCategory,
     variant: NonNullable<CreateProductDto['variants']>[number],
     savedVariant: ProductVariant,
+    repository = this.productVariantAttributeValueRepository,
   ) {
     return (variant.attributes ?? []).map((item) => {
       const attribute = subCategory.attributes.find(
@@ -238,12 +251,120 @@ export class ProductsService {
 
       this.validateVariantAttributeValue(attribute, item.value);
 
-      return this.productVariantAttributeValueRepository.create({
+      return repository.create({
         value: item.value,
         variant: savedVariant,
         attribute,
       });
     });
+  }
+
+  private variantSignature(variant: {
+    size: string;
+    colorHex?: string | null;
+    color?: string | null;
+  }) {
+    return [
+      variant.size.trim().toLocaleLowerCase('es-AR'),
+      (variant.colorHex ?? variant.color ?? '')
+        .trim()
+        .toLocaleLowerCase('es-AR'),
+    ].join('|');
+  }
+
+  private async syncProductVariants(
+    product: Product,
+    subCategory: SubCategory,
+    variants: NormalizedVariantInput[],
+    variantsRepository: Repository<ProductVariant>,
+    attributesRepository: Repository<ProductVariantAttributeValue>,
+  ) {
+    const existingVariants = product.variants ?? [];
+    const existingById = new Map(
+      existingVariants.map((variant) => [variant.id, variant]),
+    );
+    const submittedIds = variants
+      .map((variant) => ('id' in variant ? variant.id : undefined))
+      .filter((id): id is string => Boolean(id));
+
+    if (new Set(submittedIds).size !== submittedIds.length) {
+      throw new BadRequestException('Hay IDs de variantes repetidos');
+    }
+
+    for (const id of submittedIds) {
+      if (!existingById.has(id)) {
+        throw new BadRequestException(
+          `La variante ${id} no pertenece a este producto`,
+        );
+      }
+    }
+
+    const submittedIdSet = new Set(submittedIds);
+    const existingSignatures = new Map(
+      existingVariants.map((variant) => [
+        this.variantSignature(variant),
+        variant,
+      ]),
+    );
+
+    for (const variant of variants) {
+      const id = 'id' in variant ? variant.id : undefined;
+
+      if (!id) {
+        const existing = existingSignatures.get(this.variantSignature(variant));
+
+        if (existing && !submittedIdSet.has(existing.id)) {
+          throw new BadRequestException(
+            `La variante existente ${existing.id} debe enviarse con su id`,
+          );
+        }
+      }
+    }
+
+    const omittedVariants = existingVariants.filter(
+      (variant) => !submittedIdSet.has(variant.id),
+    );
+
+    if (omittedVariants.length > 0) {
+      omittedVariants.forEach((variant) => {
+        variant.isActive = false;
+        variant.stock = 0;
+      });
+      await variantsRepository.save(omittedVariants);
+    }
+
+    for (const variant of variants) {
+      const id = 'id' in variant ? variant.id : undefined;
+      const variantEntity = id
+        ? existingById.get(id)!
+        : variantsRepository.create({ product });
+
+      Object.assign(variantEntity, {
+        size: variant.size.trim(),
+        color: variant.color?.trim() || null,
+        colorHex: variant.colorHex?.trim() || null,
+        catalogColor: variant.catalogColor,
+        price: variant.price,
+        stock: variant.stock,
+        isActive: variant.isActive ?? true,
+      });
+
+      const savedVariant = await variantsRepository.save(variantEntity);
+      await attributesRepository.delete({
+        variant: { id: savedVariant.id },
+      });
+
+      const attributeValues = this.buildVariantAttributeValues(
+        subCategory,
+        variant,
+        savedVariant,
+        attributesRepository,
+      );
+
+      if (attributeValues.length > 0) {
+        await attributesRepository.save(attributeValues);
+      }
+    }
   }
 
   private validateVariantOptions(
@@ -272,8 +393,8 @@ export class ProductsService {
   }
 
   private async normalizeVariantColors(
-    variants?: CreateProductDto['variants'],
-  ): Promise<CreateProductDto['variants']> {
+    variants?: VariantInput[],
+  ): Promise<NormalizedVariantInput[] | undefined> {
     if (variants === undefined) {
       return undefined;
     }
@@ -281,6 +402,11 @@ export class ProductsService {
     const variantsWithHex = variants.filter((variant) => variant.colorHex);
     const recommendations = await this.colorsService.recommendMany(
       variantsWithHex.map((variant) => variant.colorHex!),
+    );
+    const legacyColors = await this.colorsService.findByNames(
+      variants
+        .filter((variant) => !variant.colorHex && variant.color)
+        .map((variant) => variant.color!),
     );
     let recommendationIndex = 0;
 
@@ -292,13 +418,20 @@ export class ProductsService {
           ...variant,
           color: recommendation.color.name,
           colorHex: recommendation.inputHex,
+          catalogColor: recommendation.color,
         };
       }
 
+      const legacyName = variant.color?.trim();
+      const catalogColor = legacyName
+        ? (legacyColors.get(legacyName.toLocaleLowerCase('es-AR')) ?? null)
+        : null;
+
       return {
         ...variant,
-        color: variant.color?.trim() || undefined,
+        color: catalogColor?.name ?? legacyName,
         colorHex: undefined,
+        catalogColor,
       };
     });
   }
@@ -419,6 +552,7 @@ export class ProductsService {
           size: variant.size.trim(),
           color: variant.color?.trim() || null,
           colorHex: variant.colorHex?.trim() || null,
+          catalogColor: variant.catalogColor,
           price: variant.price,
           stock: variant.stock,
           isActive: variant.isActive ?? true,
@@ -534,10 +668,7 @@ export class ProductsService {
   }
 
   async search(q: string, limit = 10): Promise<ProductResult[]> {
-    const terms = q
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+    const terms = q.trim().split(/\s+/).filter(Boolean);
 
     if (terms.length === 0) {
       throw new BadRequestException('La busqueda no puede estar vacia');
@@ -547,11 +678,12 @@ export class ProductsService {
       .createQueryBuilder('product')
       .leftJoin('product.brand', 'brand')
       .leftJoin('product.variants', 'variant')
+      .leftJoin('variant.catalogColor', 'catalogColor')
       .select('product.id', 'productId')
       .addSelect('variant.id', 'variantId')
       .addSelect('product.title', 'name')
       .addSelect('brand.name', 'brand')
-      .addSelect('variant.color', 'color')
+      .addSelect('COALESCE(catalogColor.name, variant.color)', 'color')
       .addSelect('variant.size', 'size')
       .addSelect('COALESCE(variant.stock, product.stock)', 'stock')
       .addSelect('COALESCE(variant.price, product.price)', 'price')
@@ -578,10 +710,9 @@ export class ProductsService {
       query.andWhere(
         new Brackets((termQuery) => {
           termQuery
-            .where(
-              `product.title ILIKE :${parameterName} ESCAPE '\\'`,
-              { [parameterName]: pattern },
-            )
+            .where(`product.title ILIKE :${parameterName} ESCAPE '\\'`, {
+              [parameterName]: pattern,
+            })
             .orWhere(
               `COALESCE(brand.name, '') ILIKE :${parameterName} ESCAPE '\\'`,
             )
@@ -745,78 +876,62 @@ export class ProductsService {
       }
     }
 
-    let productWithSubCategory: Product | null = null;
-
-    if (normalizedVariants !== undefined) {
-      productWithSubCategory = await this.productsRepository.findOne({
-        where: { id },
-        relations: {
-          subCategory: {
-            attributes: true,
-          },
-        },
-      });
-
-      if (!productWithSubCategory) {
-        throw new NotFoundException('Producto no encontrado');
-      }
-
-      if (!productWithSubCategory.subCategory) {
-        throw new BadRequestException('El producto no tiene subcategoria');
-      }
-      productWithSubCategory.subCategory.attributes =
-        normalizeSubCategoryAttributesAppliesTo(
-          productWithSubCategory.subCategory.attributes,
-        );
-
-      this.validateVariantOptions(
-        productWithSubCategory.subCategory,
-        normalizedVariants,
+    await this.dataSource.transaction(async (manager) => {
+      const productsRepository = manager.getRepository(Product);
+      const variantsRepository = manager.getRepository(ProductVariant);
+      const attributesRepository = manager.getRepository(
+        ProductVariantAttributeValue,
       );
+      let productWithSubCategory: Product | null = null;
 
-      for (const variant of normalizedVariants) {
-        this.validateRequiredVariantAttributes(
-          productWithSubCategory.subCategory,
-          variant,
-        );
-      }
-    }
+      if (normalizedVariants !== undefined) {
+        productWithSubCategory = await productsRepository.findOne({
+          where: { id },
+          relations: {
+            subCategory: {
+              attributes: true,
+            },
+            variants: true,
+          },
+        });
 
-    await this.productsRepository.update(id, updateData);
+        if (!productWithSubCategory) {
+          throw new NotFoundException('Producto no encontrado');
+        }
 
-    if (normalizedVariants !== undefined && productWithSubCategory) {
-      await this.productVariantRepository.delete({
-        product: { id },
-      });
-
-      if (normalizedVariants.length > 0) {
-        for (const variant of normalizedVariants) {
-          const nextVariant = this.productVariantRepository.create({
-            size: variant.size.trim(),
-            color: variant.color?.trim() || null,
-            colorHex: variant.colorHex?.trim() || null,
-            price: variant.price,
-            stock: variant.stock,
-            isActive: variant.isActive ?? true,
-            product: productWithSubCategory,
-          });
-
-          const savedVariant =
-            await this.productVariantRepository.save(nextVariant);
-          const attributeValues = this.buildVariantAttributeValues(
-            productWithSubCategory.subCategory!,
-            variant,
-            savedVariant,
+        if (!productWithSubCategory.subCategory) {
+          throw new BadRequestException('El producto no tiene subcategoria');
+        }
+        productWithSubCategory.subCategory.attributes =
+          normalizeSubCategoryAttributesAppliesTo(
+            productWithSubCategory.subCategory.attributes,
           );
 
-          if (attributeValues.length > 0) {
-            await this.productVariantAttributeValueRepository.save(
-              attributeValues,
-            );
-          }
+        this.validateVariantOptions(
+          productWithSubCategory.subCategory,
+          normalizedVariants,
+        );
+
+        for (const variant of normalizedVariants) {
+          this.validateRequiredVariantAttributes(
+            productWithSubCategory.subCategory,
+            variant,
+          );
         }
       }
-    }
+
+      if (normalizedVariants !== undefined && productWithSubCategory) {
+        await this.syncProductVariants(
+          productWithSubCategory,
+          productWithSubCategory.subCategory!,
+          normalizedVariants,
+          variantsRepository,
+          attributesRepository,
+        );
+      }
+
+      await productsRepository.update(id, updateData);
+    });
 
     return this.findOne(id);
   }

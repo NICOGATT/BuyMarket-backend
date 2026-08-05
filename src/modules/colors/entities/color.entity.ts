@@ -2,9 +2,12 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+
+import { ProductVariant } from '../../products/entity/product-variant.entity';
 
 @Entity('colors')
 export class Color {
@@ -19,6 +22,9 @@ export class Color {
 
   @Column({ type: 'varchar', length: 7, unique: true })
   hex!: string;
+
+  @OneToMany(() => ProductVariant, (variant) => variant.catalogColor)
+  variants!: ProductVariant[];
 
   @CreateDateColumn()
   createdAt!: Date;

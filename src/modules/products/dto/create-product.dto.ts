@@ -23,7 +23,7 @@ class CreateProductAttributeValueDto {
   value!: string;
 }
 
-class CreateProductVariantDto {
+export class CreateProductVariantDto {
   @IsString()
   @IsNotEmpty()
   size!: string;

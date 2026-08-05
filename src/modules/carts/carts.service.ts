@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 
@@ -27,6 +31,17 @@ export class CartsService {
     private readonly usersRepository: Repository<User>,
   ) {}
 
+  private normalizeCartVariantColors(cart: Cart) {
+    (cart.items ?? []).forEach((item) => {
+      if (item.variant) {
+        item.variant.color =
+          item.variant.catalogColor?.name ?? item.variant.color;
+      }
+    });
+
+    return cart;
+  }
+
   async getCartByUser(userId: string) {
     let cart = await this.cartsRepository.findOne({
       where: {
@@ -38,6 +53,7 @@ export class CartsService {
         'items.product',
         'items.product.media',
         'items.variant',
+        'items.variant.catalogColor',
       ],
     });
 
@@ -58,7 +74,7 @@ export class CartsService {
       cart = await this.cartsRepository.save(cart);
     }
 
-    return cart;
+    return this.normalizeCartVariantColors(cart);
   }
 
   async addProduct(
@@ -79,7 +95,7 @@ export class CartsService {
     }
 
     const activeVariants = (product.variants ?? []).filter(
-      variant => variant.isActive,
+      (variant) => variant.isActive,
     );
     const requiresVariant = activeVariants.length > 0;
 

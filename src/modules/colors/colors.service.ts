@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { deltaE76, hexToLab } from './color-distance.util';
 import { DEFAULT_COLORS } from './default-colors';
@@ -58,6 +58,30 @@ export class ColorsService implements OnApplicationBootstrap {
     }
 
     return normalizedHex;
+  }
+
+  async findByNames(names: string[]) {
+    const normalizedNames = Array.from(
+      new Set(names.map((name) => this.normalizeName(name)).filter(Boolean)),
+    );
+
+    if (normalizedNames.length === 0) {
+      return new Map<string, Color>();
+    }
+
+    const colors = await this.colorsRepository.find({
+      where: { normalizedName: In(normalizedNames) },
+      select: {
+        id: true,
+        name: true,
+        normalizedName: true,
+        hex: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return new Map(colors.map((color) => [color.normalizedName, color]));
   }
 
   private async ensureAvailable(

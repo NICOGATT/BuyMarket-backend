@@ -63,6 +63,23 @@ export class OrdersService {
     private readonly configService: ConfigService,
   ) {}
 
+  private normalizeOrderVariantColors(order: Order): Order;
+  private normalizeOrderVariantColors(orders: Order[]): Order[];
+  private normalizeOrderVariantColors(orders: Order | Order[]) {
+    const orderList: Order[] = Array.isArray(orders) ? orders : [orders];
+
+    orderList.forEach((order) => {
+      (order.items ?? []).forEach((item) => {
+        if (item.variant) {
+          item.variant.color =
+            item.variant.catalogColor?.name ?? item.variant.color;
+        }
+      });
+    });
+
+    return orders;
+  }
+
   async checkout(userId: string, checkoutDto: CheckoutOrderDto) {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -76,7 +93,12 @@ export class OrdersService {
       where: {
         user: { id: userId },
       },
-      relations: ['items', 'items.product', 'items.variant'],
+      relations: [
+        'items',
+        'items.product',
+        'items.variant',
+        'items.variant.catalogColor',
+      ],
     });
 
     if (!cart || !cart.items || cart.items.length === 0) {
@@ -91,7 +113,9 @@ export class OrdersService {
         ? [
             item.product.title,
             `talle ${item.variant.size}`,
-            item.variant.color ? `color ${item.variant.color}` : undefined,
+            (item.variant.catalogColor?.name ?? item.variant.color)
+              ? `color ${item.variant.catalogColor?.name ?? item.variant.color}`
+              : undefined,
           ]
             .filter(Boolean)
             .join(' ')
@@ -211,7 +235,7 @@ export class OrdersService {
   }
 
   async findMyOrders(userId: string) {
-    return this.ordersRepository.find({
+    const orders = await this.ordersRepository.find({
       where: {
         buyer: { id: userId },
       },
@@ -220,6 +244,7 @@ export class OrdersService {
         'items',
         'items.product',
         'items.variant',
+        'items.variant.catalogColor',
         'payment',
         'shipment',
       ],
@@ -227,6 +252,8 @@ export class OrdersService {
         createdAt: 'DESC',
       },
     });
+
+    return this.normalizeOrderVariantColors(orders);
   }
 
   async findMySales(userId: string) {
@@ -250,6 +277,7 @@ export class OrdersService {
         'product.media',
         'product.seller',
         'variant',
+        'variant.catalogColor',
       ],
       order: {
         order: {
@@ -340,7 +368,8 @@ export class OrdersService {
           ? {
               id: sale.variant.id,
               size: sale.variant.size,
-              color: sale.variant.color ?? null,
+              color:
+                sale.variant.catalogColor?.name ?? sale.variant.color ?? null,
             }
           : null,
         buyer: {
@@ -408,6 +437,7 @@ export class OrdersService {
         'items',
         'items.product',
         'items.variant',
+        'items.variant.catalogColor',
         'payment',
         'shipment',
       ],
@@ -417,16 +447,17 @@ export class OrdersService {
       throw new NotFoundException('Orden no encontrada');
     }
 
-    return order;
+    return this.normalizeOrderVariantColors(order);
   }
 
   async findAllOrders() {
-    return this.ordersRepository.find({
+    const orders = await this.ordersRepository.find({
       relations: [
         'buyer',
         'items',
         'items.product',
         'items.variant',
+        'items.variant.catalogColor',
         'items.product.seller',
         'payment',
         'shipment',
@@ -435,6 +466,8 @@ export class OrdersService {
         createdAt: 'DESC',
       },
     });
+
+    return this.normalizeOrderVariantColors(orders);
   }
 
   private normalizeNationalShippingData(data?: NationalShippingDataDto) {
