@@ -255,6 +255,8 @@ describe('ProductsService', () => {
           seller: {
             id: createProductDto.seller,
           },
+          approvalStatus: ProductApprovalStatus.APPROVED,
+          isActive: true,
         }),
       );
       expect(productRepository.save).toHaveBeenCalledWith(productToSave);
@@ -278,6 +280,38 @@ describe('ProductsService', () => {
         },
       });
       expect(result).toEqual(product);
+    });
+
+    it('deja pendiente e inactiva una publicación sensible', async () => {
+      const computingCategory = {
+        id: '2d164460-a6c9-4ecf-a227-960fbab02716',
+        name: 'Computación',
+      } as Category;
+      const monitorSubCategory = {
+        ...subCategory,
+        id: '8fae57d7-ceaa-49e8-a5b3-e5c5217a22e5',
+        name: 'Monitores',
+        category: computingCategory,
+      } as SubCategory;
+
+      subCategoryRepository.findOne?.mockResolvedValue(monitorSubCategory);
+      productRepository.create?.mockReturnValue(productToSave);
+      productRepository.save?.mockResolvedValue(savedProduct);
+      productRepository.findOne?.mockResolvedValue(product);
+
+      await service.create({
+        ...createProductDto,
+        subCategoryId: monitorSubCategory.id,
+      });
+
+      expect(productRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: computingCategory,
+          subCategory: monitorSubCategory,
+          approvalStatus: ProductApprovalStatus.PENDING,
+          isActive: false,
+        }),
+      );
     });
 
     it('asocia una marca existente al crear un producto', async () => {
@@ -1451,10 +1485,20 @@ describe('ProductsService', () => {
       expect(productVariantRepository.delete).not.toHaveBeenCalled();
     });
 
-    it('mapea subCategoryId y no lo envia como propiedad directa de Product', async () => {
+    it('sincroniza categoria, subcategoria y aprobacion al cambiar subCategoryId', async () => {
+      const sportsCategory = {
+        id: '1832ed6a-4ff8-4a8c-85a6-197ca41464c4',
+        name: 'Deportes',
+      } as Category;
+      const targetSubCategory = {
+        ...subCategory,
+        id: '22222222-2222-4222-8222-222222222222',
+        name: 'Palo de hockey',
+        category: sportsCategory,
+      } as SubCategory;
       const updateProductDto: UpdateProductDto = {
         title: 'Notebook gamer actualizada',
-        subCategoryId: subCategory.id,
+        subCategoryId: targetSubCategory.id,
         pickupAddressId: '8c8ad2ab-45e8-4be7-ae17-e60a1446f2da',
         mediaIds: ['d09a2b9d-1bc8-4aae-89d3-d652d09b9f10'],
         attributes: [
@@ -1465,6 +1509,7 @@ describe('ProductsService', () => {
         ],
       };
 
+      subCategoryRepository.findOne?.mockResolvedValue(targetSubCategory);
       productRepository.update?.mockResolvedValue({ affected: 1 });
       productRepository.findOne?.mockResolvedValue(product);
 
@@ -1473,8 +1518,11 @@ describe('ProductsService', () => {
       expect(productRepository.update).toHaveBeenCalledWith(productId, {
         title: updateProductDto.title,
         subCategory: {
-          id: subCategory.id,
+          id: targetSubCategory.id,
         },
+        category: sportsCategory,
+        approvalStatus: ProductApprovalStatus.PENDING,
+        isActive: false,
         pickupAddress: {
           id: updateProductDto.pickupAddressId,
         },
@@ -1487,6 +1535,105 @@ describe('ProductsService', () => {
           attributes: expect.any(Array),
         }),
       );
+    });
+
+    it('autoaprueba un producto sensible al moverlo a una subcategoria automatica', async () => {
+      const sensitiveCategory = {
+        id: '1832ed6a-4ff8-4a8c-85a6-197ca41464c4',
+        name: 'Deportes',
+      } as Category;
+      const currentSubCategory = {
+        ...subCategory,
+        name: 'Carpas',
+        category: sensitiveCategory,
+      } as SubCategory;
+      const automaticSubCategory = {
+        ...subCategory,
+        id: '33333333-3333-4333-8333-333333333333',
+        name: 'Pelotas',
+        category: sensitiveCategory,
+      } as SubCategory;
+
+      subCategoryRepository.findOne?.mockResolvedValue(automaticSubCategory);
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        subCategory: currentSubCategory,
+        approvalStatus: ProductApprovalStatus.PENDING,
+        isActive: false,
+      });
+      productRepository.update?.mockResolvedValue({ affected: 1 });
+
+      await service.update(productId, {
+        subCategoryId: automaticSubCategory.id,
+      });
+
+      expect(productRepository.update).toHaveBeenCalledWith(
+        productId,
+        expect.objectContaining({
+          approvalStatus: ProductApprovalStatus.APPROVED,
+          isActive: true,
+        }),
+      );
+    });
+
+    it('autoaprueba un producto rechazado al moverlo a una subcategoria automatica', async () => {
+      const automaticSubCategory = {
+        ...subCategory,
+        id: '44444444-4444-4444-8444-444444444444',
+        name: 'Notebooks',
+      } as SubCategory;
+
+      subCategoryRepository.findOne?.mockResolvedValue(automaticSubCategory);
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        subCategory: {
+          ...subCategory,
+          id: '55555555-5555-4555-8555-555555555555',
+          name: 'Otros',
+        },
+        approvalStatus: ProductApprovalStatus.REJECTED,
+        isActive: false,
+      });
+      productRepository.update?.mockResolvedValue({ affected: 1 });
+
+      await service.update(productId, {
+        subCategoryId: automaticSubCategory.id,
+      });
+
+      expect(productRepository.update).toHaveBeenCalledWith(
+        productId,
+        expect.objectContaining({
+          approvalStatus: ProductApprovalStatus.APPROVED,
+          isActive: true,
+        }),
+      );
+    });
+
+    it('conserva la aprobacion si subCategoryId no cambia efectivamente', async () => {
+      subCategoryRepository.findOne?.mockResolvedValue(subCategory);
+      productRepository.findOne?.mockResolvedValue({
+        ...product,
+        subCategory,
+        approvalStatus: ProductApprovalStatus.REJECTED,
+        isActive: false,
+      });
+      productRepository.update?.mockResolvedValue({ affected: 1 });
+
+      await service.update(productId, { subCategoryId: subCategory.id });
+
+      expect(productRepository.update).toHaveBeenCalledWith(productId, {});
+    });
+
+    it('rechaza el cambio a una subcategoria inexistente', async () => {
+      subCategoryRepository.findOne?.mockResolvedValue(null);
+
+      await expect(
+        service.update(productId, {
+          subCategoryId: '66666666-6666-4666-8666-666666666666',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(productRepository.update).not.toHaveBeenCalled();
     });
 
     it('lanza NotFoundException si el producto actualizado no existe', async () => {

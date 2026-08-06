@@ -36,6 +36,7 @@ import { ProductResult } from './dto/product-result.dto';
 import { ColorsService } from '../colors/colors.service';
 import { Color } from '../colors/entities/color.entity';
 import { CreateProductVariantDto } from './dto/create-product.dto';
+import { requiresManualProductApproval } from './product-approval-policy';
 
 type ProductSearchRow = Omit<ProductResult, 'stock' | 'price' | 'currency'> & {
   stock: number | string;
@@ -73,6 +74,20 @@ export class ProductsService {
     private readonly colorsService: ColorsService,
     private readonly dataSource: DataSource,
   ) {}
+
+  private approvalStateFor(subCategory: SubCategory) {
+    const requiresApproval = requiresManualProductApproval(
+      subCategory.category.name,
+      subCategory.name,
+    );
+
+    return {
+      approvalStatus: requiresApproval
+        ? ProductApprovalStatus.PENDING
+        : ProductApprovalStatus.APPROVED,
+      isActive: !requiresApproval,
+    };
+  }
 
   private removeSellerPassword<T extends Product | Product[]>(products: T): T {
     const productList = Array.isArray(products) ? products : [products];
@@ -530,8 +545,7 @@ export class ProductsService {
       description: createProductDto.description,
       price: productTotals.price,
       stock: productTotals.stock,
-      isActive: false,
-      approvalStatus: ProductApprovalStatus.PENDING,
+      ...this.approvalStateFor(subCategory),
       category: subCategory.category,
       subCategory,
       brand,
@@ -856,9 +870,22 @@ export class ProductsService {
       ...rest,
       ...productTotals,
       ...(seller ? { seller: { id: seller } } : {}),
-      ...(subCategoryId ? { subCategory: { id: subCategoryId } } : {}),
       ...(pickupAddressId ? { pickupAddress: { id: pickupAddressId } } : {}),
     };
+
+    const targetSubCategory = subCategoryId
+      ? await this.subCategoryRepository.findOne({
+          where: { id: subCategoryId },
+          relations: {
+            category: true,
+            attributes: true,
+          },
+        })
+      : null;
+
+    if (subCategoryId && !targetSubCategory) {
+      throw new NotFoundException('Subcategoría no encontrada');
+    }
 
     if (brandId !== undefined) {
       if (brandId === null) {
@@ -884,7 +911,7 @@ export class ProductsService {
       );
       let productWithSubCategory: Product | null = null;
 
-      if (normalizedVariants !== undefined) {
+      if (normalizedVariants !== undefined || targetSubCategory) {
         productWithSubCategory = await productsRepository.findOne({
           where: { id },
           relations: {
@@ -899,31 +926,45 @@ export class ProductsService {
           throw new NotFoundException('Producto no encontrado');
         }
 
-        if (!productWithSubCategory.subCategory) {
+        const effectiveSubCategory =
+          targetSubCategory ?? productWithSubCategory.subCategory;
+
+        if (!effectiveSubCategory) {
           throw new BadRequestException('El producto no tiene subcategoria');
         }
-        productWithSubCategory.subCategory.attributes =
+
+        if (
+          targetSubCategory &&
+          productWithSubCategory.subCategory?.id !== targetSubCategory.id
+        ) {
+          Object.assign(updateData, {
+            subCategory: { id: targetSubCategory.id },
+            category: targetSubCategory.category,
+            ...this.approvalStateFor(targetSubCategory),
+          });
+        }
+
+        effectiveSubCategory.attributes =
           normalizeSubCategoryAttributesAppliesTo(
-            productWithSubCategory.subCategory.attributes,
+            effectiveSubCategory.attributes,
           );
 
-        this.validateVariantOptions(
-          productWithSubCategory.subCategory,
-          normalizedVariants,
-        );
+        if (normalizedVariants !== undefined) {
+          this.validateVariantOptions(effectiveSubCategory, normalizedVariants);
 
-        for (const variant of normalizedVariants) {
-          this.validateRequiredVariantAttributes(
-            productWithSubCategory.subCategory,
-            variant,
-          );
+          for (const variant of normalizedVariants) {
+            this.validateRequiredVariantAttributes(
+              effectiveSubCategory,
+              variant,
+            );
+          }
         }
       }
 
       if (normalizedVariants !== undefined && productWithSubCategory) {
         await this.syncProductVariants(
           productWithSubCategory,
-          productWithSubCategory.subCategory!,
+          targetSubCategory ?? productWithSubCategory.subCategory!,
           normalizedVariants,
           variantsRepository,
           attributesRepository,

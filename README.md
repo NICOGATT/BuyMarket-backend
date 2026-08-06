@@ -144,7 +144,7 @@ La publicación debe validarse automáticamente verificando:
 - Que la categoría exista dentro de las categorías disponibles.
 - Que las imágenes correspondan al producto publicado.
 
-Las publicaciones cargadas en la categoría "Otros" deben pasar por una verificación manual previa.
+Las publicaciones de subcategorías sensibles deben pasar por una verificación manual previa. Esto incluye "Otros" en cualquier categoría, todas las subcategorías de Jardinería y Gimnasio, y las subcategorías configuradas de Deportes, Bebés, Computación, Mascotas, Juguetes, Librería, Cotillón, Limpieza, Deco Bazar, Videojuegos y Textiles. Las demás publicaciones se aprueban y activan automáticamente.
 
 ### RF05 - Publicación de productos
 
@@ -324,7 +324,8 @@ Los reclamos deben poder ser atendidos por el dueño de la aplicación o asistid
 
 **Flujos alternativos:**
 
-- Si la categoría seleccionada es "Otros", la publicación queda pendiente de revisión manual.
+- Si la subcategoría seleccionada requiere aprobación según la política de publicaciones, el producto queda inactivo y pendiente de revisión manual.
+- En las demás subcategorías, el producto queda aprobado y activo automáticamente.
 - Si faltan datos obligatorios, el sistema solicita completarlos.
 - Si la imagen no corresponde al producto, el sistema rechaza o deja pendiente la publicación.
 
@@ -850,7 +851,7 @@ Los reclamos deben poder ser atendidos por el dueño de la aplicación o asistid
 - El precio debe ser mayor a cero.
 - El stock no puede ser negativo.
 - La categoría debe existir.
-- Las publicaciones en "Otros" requieren revisión manual.
+- Las subcategorías sensibles definidas por la política de publicaciones requieren revisión manual; las demás se aprueban automáticamente.
 - Las imágenes deben coincidir con el producto publicado cuando se use verificación automática.
 
 ### Estados de pedido
