@@ -608,11 +608,21 @@ export class PaymentsService {
    * Toda la decision corre dentro de una transaccion con lock pesimista sobre
    * la orden: dos llamadas concurrentes no pueden generar dos intenciones
    * externas porque la segunda espera el lock y reutiliza el intento vigente.
+   *
+   * Si Getnet falla, la transaccion hace rollback y se registra evidencia del
+   * fallo en una operacion separada (fuera de la transaccion), sin ocultar el
+   * error original.
    */
   async createGetnetOrder(orderId: string, userId: string) {
-    return this.dataSource.transaction((manager) =>
-      this.createGetnetIntentWithinTransaction(manager, orderId, userId),
-    );
+    try {
+      return await this.dataSource.transaction((manager) =>
+        this.createGetnetIntentWithinTransaction(manager, orderId, userId),
+      );
+    } catch (error) {
+      // Evidencia best-effort posterior al rollback: nunca enmascara el error.
+      await this.recordGetnetCreationFailureAudit(orderId, userId, error);
+      throw error;
+    }
   }
 
   private async createGetnetIntentWithinTransaction(
@@ -621,12 +631,15 @@ export class PaymentsService {
     userId: string,
   ) {
     const orderRepository = manager.getRepository(Order);
+    // Lock sin joins: `buyer` no es eager y FOR UPDATE con LEFT JOIN falla en
+    // PostgreSQL. Se bloquea solo la fila de la orden y la propiedad se valida
+    // sobre la orden completa cargada con relaciones.
     const lockedOrder = await orderRepository.findOne({
       where: { id: orderId },
       lock: { mode: 'pessimistic_write' },
     });
 
-    if (!lockedOrder || lockedOrder.buyer?.id !== userId) {
+    if (!lockedOrder) {
       throw new NotFoundException('Orden no encontrada');
     }
 
@@ -635,7 +648,7 @@ export class PaymentsService {
       relations: ['buyer', 'items', 'items.product'],
     });
 
-    if (!order) {
+    if (!order || order.buyer?.id !== userId) {
       throw new NotFoundException('Orden no encontrada');
     }
 
@@ -712,9 +725,116 @@ export class PaymentsService {
 
       return this.getnetCheckoutResponse(order, attempt);
     } catch (error) {
-      attempt.status = PaymentAttemptStatus.ERROR;
-      await attemptRepository.save(attempt);
+      // Marcar ERROR aqui seria code muerto: el rethrow dispara el rollback de
+      // la transaccion y descarta este save. La evidencia del fallo se registra
+      // en recordGetnetCreationFailureAudit, fuera de la transaccion.
       throw error;
+    }
+  }
+
+  /**
+   * Evidencia post-rollback de un fallo creando la intencion. Corre en una
+   * conexion separada (fuera de la transaccion abortada), es best-effort y no
+   * persiste datos sensibles del payload ni del error.
+   */
+  private async recordGetnetCreationFailureAudit(
+    orderId: string,
+    userId: string,
+    error: unknown,
+  ) {
+    try {
+      const orderRepository = this.dataSource.getRepository(Order);
+      const order = await orderRepository.findOne({
+        where: { id: orderId },
+        relations: ['buyer'],
+      });
+
+      // Solo deja rastro cuando el fallo ocurrio en etapas de pago (orden
+      // candidata valida), no en errores de validacion/autorizacion.
+      if (
+        !order ||
+        order.status !== OrderStatus.PENDING ||
+        order.paymentMethod !== PaymentMethod.GETNET ||
+        order.buyer?.id !== userId
+      ) {
+        return;
+      }
+
+      const paymentRepository = this.dataSource.getRepository(PaymentEntity);
+      let payment = await this.findGetnetPaymentEntity(paymentRepository, order.id);
+      if (!payment) {
+        payment = await paymentRepository.save(
+          paymentRepository.create({
+            method: PaymentMethod.GETNET,
+            status: PaymentStatus.PENDING,
+            amount: Number(order.total),
+            order,
+          }),
+        );
+      }
+
+      const attemptRepository = this.dataSource.getRepository(PaymentAttempt);
+      const message =
+        error instanceof Error ? error.message : String(error ?? 'unknown');
+      await attemptRepository.save(
+        attemptRepository.create({
+          idempotencyKey: randomUUID(),
+          status: PaymentAttemptStatus.ERROR,
+          expiresAt: this.getnetIntentExpiration(new Date()),
+          payment,
+          metadata: {
+            provider: 'getnet_web_checkout',
+            stage: 'create_payment_intent',
+            failure: 'provider_error',
+            errorMessage: message.slice(0, 500),
+            recordedAt: new Date().toISOString(),
+          },
+        }),
+      );
+    } catch (auditError) {
+      this.logger.error(
+        `No se pudo registrar la auditoria de fallo de Getnet para la orden ${orderId}: ${auditError instanceof Error ? auditError.message : auditError}`,
+      );
+    }
+  }
+
+  /**
+   * Evidencia post-rollback cuando el webhook no pudo completarse (por ejemplo
+   * fallo la acreditacion). Actualiza el intento existente en una operacion
+   * separada y nunca propaga un segundo error.
+   */
+  /**
+   * Evidencia post-rollback cuando el webhook no pudo completarse (por ejemplo
+   * fallo la acreditacion). Actualiza el intento existente en una operacion
+   * separada y nunca propaga un segundo error.
+   */
+  private async recordGetnetWebhookFailureAudit(
+    event: GetnetWebhookEvent & { orderId: string; paymentIntentId: string },
+  ) {
+    try {
+      const attemptRepository = this.dataSource.getRepository(PaymentAttempt);
+      const attempt = await attemptRepository.findOne({
+        where: { externalPaymentId: event.paymentIntentId },
+      });
+
+      if (!attempt) {
+        return;
+      }
+
+      const now = new Date();
+      attempt.rawStatus = event.statusRaw ?? attempt.rawStatus;
+      attempt.lastNotifiedAt = now;
+      attempt.metadata = {
+        provider: 'getnet_web_checkout',
+        status: event.statusRaw ?? null,
+        failure: 'processing_failed',
+        recordedAt: now.toISOString(),
+      };
+      await attemptRepository.save(attempt);
+    } catch (auditError) {
+      this.logger.error(
+        `No se pudo registrar la auditoria de fallo del webhook de Getnet (order ${event.orderId}): ${auditError instanceof Error ? auditError.message : auditError}`,
+      );
     }
   }
 
@@ -751,6 +871,15 @@ export class PaymentsService {
       attempt.status = expired
         ? PaymentAttemptStatus.EXPIRED
         : PaymentAttemptStatus.CANCELED;
+
+      // Pista de reconciliacion: si Getnet llego a crear una intencion que
+      // nunca se confirmo (crash antes de guardarla), queda registrada en logs
+      // para soporte. Requiere endpoint de consulta para automatizarse.
+      if (attempt.externalPaymentId && !expired) {
+        this.logger.warn(
+          `Getnet intent sin confirmar quedo sin usar: paymentIntentId=${attempt.externalPaymentId} paymentId=${payment.id} status=${attempt.status}`,
+        );
+      }
     });
 
     await attemptRepository.save(stale);
@@ -805,7 +934,13 @@ export class PaymentsService {
 
     const transition = await this.dataSource.transaction((manager) =>
       this.applyGetnetWebhookTransition(manager, confirmedEvent),
-    );
+    ).catch(async (error: unknown) => {
+      // La transaccion ya hizo rollback. La evidencia del evento se registra
+      // en una operacion separada y el error original sigue hacia arriba para
+      // que Getnet reintente la entrega.
+      await this.recordGetnetWebhookFailureAudit(confirmedEvent);
+      throw error;
+    });
 
     if (!transition.handled || !transition.order) {
       return { received: true };
@@ -938,7 +1073,9 @@ export class PaymentsService {
       attempt = await this.backfillGetnetAttempt(manager, order, event);
     }
 
-    // Evidencia de auditoria: se persiste aunque el evento luego se ignore.
+    // Evidencia de auditoria: queda persistida cuando el evento se ignora de
+    // forma controlada (commit normal). Si la transaccion falla y hace
+    // rollback, recordGetnetWebhookFailureAudit la registra por separado.
     this.touchGetnetAttempt(attempt, event);
     await attemptRepository.save(attempt);
 
@@ -1001,18 +1138,24 @@ export class PaymentsService {
         order,
         sellers: [],
         notifyApproved: false,
-        notifyRejected: !wasAlreadyRejected,
+        // createOnce es idempotente por eventKey: reintentar la notificacion
+        // del comprador ante webhooks duplicados recupera avisos perdidos sin
+        // duplicar registros.
+        notifyRejected: true,
       };
     }
 
     const wasAlreadyPaid = order.status === OrderStatus.PAID;
     if (wasAlreadyPaid) {
+      // Webhook duplicado de una orden ya pagada: no se vuelve a acreditar.
+      // Se reconstruyen los resumenes por vendedor para reintentar las
+      // notificaciones idempotentes si un intento anterior fallo.
       return {
         handled: true,
         duplicate: true,
         order,
-        sellers: [],
-        notifyApproved: false,
+        sellers: this.sellerSummaries(this.sellerAmountsFromOrder(order)),
+        notifyApproved: true,
         notifyRejected: false,
       };
     }

@@ -973,9 +973,14 @@ Garantías:
 - Aprobación y rechazo son idempotentes en PostgreSQL: webhook duplicado no
   duplica saldos ni notificaciones; un rechazo posterior nunca revierte una
   orden pagada.
-- Orden, billeteras y auditoría corren dentro de una misma transacción; si
-  falla la acreditación de cualquier vendedor, todo vuelve atrás y Getnet
-  reintentará la entrega.
+- Orden, billeteras y auditoría de transición corren dentro de una misma
+  transacción; si falla la acreditación de cualquier vendedor, todo vuelve atrás
+  y Getnet reintentará la entrega. Ante ese fallo, la evidencia del evento se
+  registra **después del rollback** en una operación separada sobre el intento
+  (`metadata.failure`), sin persistir datos sensibles del payload.
+- Las notificaciones usan claves idempotentes (`eventKey`): si un webhook se
+  procesa pero la creación de notificaciones falla, el reintento de Getnet las
+  regenera sin reacreditar billeteras.
 
 ### Endpoints internos
 
@@ -1095,10 +1100,13 @@ la homologación con payloads simplificados): moneda distinta de `ARS`,
 importe inconsistente con la orden (según `GETNET_AMOUNT_UNIT`), `payment_id`
 se registra cuando viene pero su ausencia no bloquea.
 
-Auditoría: cada evento actualiza el `PaymentAttempt` correspondiente
-(`rawStatus`, `providerPaymentId`, `lastNotifiedAt`, metadata sanitizada sin
-datos sensibles). Los índices únicos sobre `externalPaymentId` y
-`providerPaymentId` respaldan la idempotencia a nivel PostgreSQL.
+Auditoría: cada evento que se procesa o descarta de forma controlada actualiza
+el `PaymentAttempt` correspondiente (`rawStatus`, `providerPaymentId`,
+`lastNotifiedAt`, metadata sanitizada sin datos sensibles). Si el procesamiento
+falla y la transacción hace rollback, la evidencia queda registrada en una
+operación separada (`metadata.failure = "processing_failed"`). Los índices
+únicos sobre `externalPaymentId` y `providerPaymentId` respaldan la idempotencia
+a nivel PostgreSQL.
 
 ### Pruebas locales del webhook
 
@@ -1190,8 +1198,18 @@ saldo ni notificaciones; los eventos ignorados quedaron logueados con motivo.
 
 ### Migraciones
 
-El proyecto usa `synchronize` controlado por `DB_SYNCHRONIZE` (default `true`
-en desarrollo). Para producción ponerlo en `false` y aplicar migraciones no
+El proyecto usa `synchronize` controlado por la función centralizada
+`resolveDatabaseSynchronize` (`src/config/database-synchronize.ts`) con esta
+semántica:
+
+| `NODE_ENV` | `DB_SYNCHRONIZE` | Resultado |
+|---|---|---|
+| `production` | cualquier valor (incluso ausente) | `false` |
+| desarrollo/test | `true` explícito | `true` |
+| desarrollo/test | ausente o cualquier otro valor | `false` |
+
+Es decir: **el default es `false`** y en producción nunca se sincroniza, aunque
+la variable diga lo contrario. El esquema se aplica con migraciones no
 destructivas:
 
 ```bash
@@ -1202,7 +1220,35 @@ npm run migration:revert   # revertir la última
 
 Migraciones incluidas: `1724505600000-AddGetnetWebCheckoutAttemptFields`
 (agrega columnas de auditoría e índices únicos en `payment_attempts`; no borra
-ni modifica datos existentes).
+ni modifica datos existentes). Su `up`/`down` se verifica contra PostgreSQL real
+con `test/getnet-migration.integration-spec.ts`.
+
+**Deuda técnica conocida:** el repositorio no tiene una migración inicial que
+cree el esquema completo desde cero; hoy la base se bootstrappea con
+`synchronize` en desarrollo. Antes del primer deploy productivo hay que generar
+esa migración inicial (por ejemplo con `typeorm migration:generate -n InitSchema`)
+y validarla en un ambiente limpio.
+
+### Idempotencia externa y transacción larga (limitaciones actuales)
+
+- La clave local `idempotencyKey` de cada intento **no** se envía a Getnet: ni
+  el manual simplificado de Web Checkout documenta un header de idempotencia ni
+  un campo equivalente para `/digital-checkout/v1/payment-intent` (en la API QR
+  interoperable sí existe `idempotency_key`, pero es otra API). Estado:
+  **requiere confirmación de Getnet**.
+- Mientras no haya confirmación, la protección contra intenciones duplicadas es
+  el lock pesimista sobre la orden + reutilización del intento vigente, lo que
+  implica mantener la transacción abierta durante la llamada HTTP a Getnet
+  (hasta `GETNET_TIMEOUT_MS`, default 10 s). Riesgo documentado: conexiones del
+  pool ocupadas y solicitudes concurrentes sobre la misma orden serializadas
+  (ese comportamiento es deseado). Refactor a flujo de estado intermedio solo
+  cuando Getnet confirme idempotencia oficial.
+- Escenario de reconciliación pendiente: si Getnet crea el intent y BuyMarket
+  pierde la conexión antes de guardar `payment_intent_id`, el usuario reintenta
+  y se genera una segunda intención externa. Hoy ese caso queda registrado en
+  logs (`Getnet intent sin confirmar quedo sin usar`) para soporte; automatizarlo
+  requiere un endpoint de consulta por `order_id`. También **requiere
+  confirmación de Getnet**.
 
 ### Preguntas abiertas para Getnet
 
@@ -1211,11 +1257,15 @@ ni modifica datos existentes).
 2. ¿El webhook soporta autenticación (Basic Auth, firma HMAC o secret)? El
    manual nuevo no lo confirma; mientras tanto `basic` es default y `none`
    existe solo para UAT.
-3. ¿El endpoint `/digital-checkout/v1/payment-intent` acepta campos extra
+3. ¿Existe soporte oficial de idempotencia para la creación de payment intents
+   (header tipo `Idempotency-Key` o campo en el body)?
+4. ¿Existe endpoint de consulta de payment intents por `order_id` para
+   reconciliar intentos creados pero no confirmados?
+5. ¿El endpoint `/digital-checkout/v1/payment-intent` acepta campos extra
    (detalle de productos, `3ds`, `expires_at`) además del body simplificado?
-4. ¿Qué estados intermedios puede reportar el webhook además de
+6. ¿Qué estados intermedios puede reportar el webhook además de
    APPROVED/AUTHORIZED y REJECTED/DENIED (por ejemplo expiración)?
-5. Tarjetas de prueba oficiales de UAT: usar las del manual de homologación
+7. Tarjetas de prueba oficiales de UAT: usar las del manual de homologación
    vigente provisto por Getnet.
 
 ## Getnet QR interoperable

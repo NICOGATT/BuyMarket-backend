@@ -199,6 +199,14 @@ describe('PaymentsService', () => {
     };
     dataSource = {
       transaction: jest.fn((callback) => callback(transactionManager)),
+      // Operaciones fuera de la transaccion (auditoria post-rollback) usan
+      // estos mismos repositorios simulados.
+      getRepository: jest.fn((entity) => {
+        if (entity === Order) return txOrderRepository;
+        if (entity === PaymentEntity) return txPaymentRepository;
+        if (entity === PaymentAttempt) return txAttemptRepository;
+        throw new Error(`Repositorio no configurado: ${entity}`);
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -713,7 +721,7 @@ describe('PaymentsService', () => {
       expect(order.paymentPreferenceId).toBe('intent-1');
     });
 
-    it('marca el intento como ERROR si Getnet falla y no actualiza la orden', async () => {
+    it('no persiste el intento ni actualiza la orden si Getnet falla (el rollback lo descarta)', async () => {
       const order = setupGetnetOrder();
       txPaymentRepository.findOne?.mockResolvedValue(null);
       getnetClient.createPaymentIntent.mockRejectedValue(
@@ -724,8 +732,21 @@ describe('PaymentsService', () => {
         service.createGetnetOrder(orderId, buyerId),
       ).rejects.toBeInstanceOf(BadGatewayException);
 
-      expect(attemptsStore[0].status).toBe(PaymentAttemptStatus.ERROR);
+      // El intento quedo PENDING en memoria del store simulado: el save de
+      // ERROR dentro de la transaccion se descarta con el rollback. La orden
+      // no referencia ninguna intencion externa.
+      expect(attemptsStore[0].status).toBe(PaymentAttemptStatus.PENDING);
+      expect(attemptsStore[0].externalPaymentId).toBeUndefined();
       expect(order.paymentPreferenceId).toBeUndefined();
+    });
+
+    it('rechaza al comprador equivocado aunque la orden exista', async () => {
+      setupGetnetOrder();
+
+      await expect(
+        service.createGetnetOrder(orderId, 'otro-comprador'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(getnetClient.createPaymentIntent).not.toHaveBeenCalled();
     });
 
     it('rechaza una orden inexistente o ajena', async () => {
@@ -940,7 +961,7 @@ describe('PaymentsService', () => {
       expect(attemptsStore[0].rawStatus).toBe('AUTHORIZED');
     });
 
-    it('no duplica creditos ni notificaciones ante un webhook duplicado', async () => {
+    it('ante un webhook duplicado no reacredita y reintenta notificaciones idempotentes', async () => {
       const order = setupGetnetOrder({ status: OrderStatus.PAID });
       order.paymentId = 'getnet-payment-1';
       txOrderRepository.findOne?.mockResolvedValue(order);
@@ -958,8 +979,10 @@ describe('PaymentsService', () => {
       expect(first).toEqual({ received: true });
       expect(second).toEqual({ received: true });
       expect(order.status).toBe(OrderStatus.PAID);
+      // Nunca se vuelve a acreditar; las notificaciones idempotentes se
+      // reintentan para recuperar avisos perdidos de un intento anterior.
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
-      expect(notificationsService.createManyOnce).not.toHaveBeenCalled();
+      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(2);
     });
 
     it('serializa dos webhooks aprobados concurrentes sin duplicar creditos', async () => {
@@ -1045,7 +1068,7 @@ describe('PaymentsService', () => {
       expect(notificationsService.createOnce).not.toHaveBeenCalled();
     });
 
-    it('no notifica dos veces un rechazo duplicado', async () => {
+    it('reintenta la notificacion idempotente ante un rechazo duplicado', async () => {
       const order = setupGetnetOrder({ status: OrderStatus.REJECTED, paymentStatus: 'REJECTED' });
       txOrderRepository.findOne?.mockResolvedValue(order);
       txAttemptRepository.findOne.mockResolvedValue(undefined);
@@ -1055,7 +1078,14 @@ describe('PaymentsService', () => {
         rejectedSimplifiedPayload(orderId),
       );
 
-      expect(notificationsService.createOnce).not.toHaveBeenCalled();
+      // createOnce deduplica por eventKey: reintentar no duplica registros y
+      // recupera el aviso si el primer intento fallo.
+      expect(notificationsService.createOnce).toHaveBeenCalledTimes(1);
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventKey: `order:${orderId}:buyer:payment-rejected`,
+        }),
+      );
     });
 
     it('ignora ordenes inexistentes e intents inconsistentes sin mutar datos', async () => {
@@ -1107,10 +1137,12 @@ describe('PaymentsService', () => {
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
     });
 
-    it('propaga fallos transaccionales para que Getnet reintente', async () => {
+    it('propaga fallos transaccionales para que Getnet reintente y registra evidencia aparte', async () => {
       const order = setupGetnetOrder();
       txOrderRepository.findOne?.mockResolvedValue(order);
-      txAttemptRepository.findOne.mockResolvedValue(undefined);
+      txAttemptRepository.findOne
+        .mockResolvedValueOnce(undefined)
+        .mockImplementation(async () => attemptsStore[0]);
       walletService.creditFromOrder.mockRejectedValueOnce(
         new Error('wallet unavailable'),
       );
@@ -1124,8 +1156,78 @@ describe('PaymentsService', () => {
 
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(notificationsService.createManyOnce).not.toHaveBeenCalled();
-      // La evidencia del webhook queda persistida aunque el credito falle.
+      // La evidencia dentro de la transaccion se descarta con el rollback; lo
+      // que queda persistido es el registro separado post-rollback.
+      expect(attemptsStore[0].metadata?.failure).toBe('processing_failed');
       expect(attemptsStore[0].lastNotifiedAt).toBeInstanceOf(Date);
+    });
+
+    it('recupera notificaciones aprobadas en el reintento sin reacreditar billeteras', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+      notificationsService.createManyOnce
+        .mockRejectedValueOnce(new Error('notifications down'))
+        .mockResolvedValue([]);
+
+      await expect(
+        service.handleGetnetWebhook(
+          basicAuthorization,
+          authorizedFullPayload(orderId),
+        ),
+      ).rejects.toThrow('notifications down');
+
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+
+      // Reintento de Getnet con el mismo payload: no reacredita y reintenta
+      // las notificaciones idempotentes.
+      await expect(
+        service.handleGetnetWebhook(
+          basicAuthorization,
+          authorizedFullPayload(orderId),
+        ),
+      ).resolves.toEqual({ received: true });
+
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(2);
+
+      // Un tercer reintento tampoco acredita ni agrega llamadas nuevas.
+      await service.handleGetnetWebhook(
+        basicAuthorization,
+        authorizedFullPayload(orderId),
+      );
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(3);
+    });
+
+    it('recupera la notificacion de rechazo en el reintento sin duplicar registros', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+      notificationsService.createOnce
+        .mockRejectedValueOnce(new Error('notifications down'))
+        .mockResolvedValue(undefined);
+
+      await expect(
+        service.handleGetnetWebhook(
+          basicAuthorization,
+          rejectedSimplifiedPayload(orderId),
+        ),
+      ).rejects.toThrow('notifications down');
+
+      expect(order.status).toBe(OrderStatus.REJECTED);
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+
+      await expect(
+        service.handleGetnetWebhook(
+          basicAuthorization,
+          rejectedSimplifiedPayload(orderId),
+        ),
+      ).resolves.toEqual({ received: true });
+
+      expect(notificationsService.createOnce).toHaveBeenCalledTimes(2);
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
     });
   });
 

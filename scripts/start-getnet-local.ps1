@@ -16,6 +16,8 @@ $env:DB_PORT = "55432"
 $env:DB_USER = "postgres"
 $env:DB_PASSWORD = "postgres"
 $env:DB_DATABASE = "buymarket_webhook_test"
+# Base descartable local: sincronizacion opt-in explicita (default global es false).
+$env:DB_SYNCHRONIZE = "true"
 $env:PORT = "$Port"
 $env:GETNET_WEBHOOK_USERNAME = $Username
 $env:GETNET_WEBHOOK_PASSWORD = $Password

@@ -1,3 +1,7 @@
+import {
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, Repository } from 'typeorm';
@@ -22,7 +26,10 @@ import {
   PaymentAttempt,
   PaymentAttemptStatus,
 } from '../src/modules/payments/entity/payment-attempt.entity';
-import { Payment } from '../src/modules/payments/entity/payment.entity';
+import {
+  Payment,
+  PaymentStatus,
+} from '../src/modules/payments/entity/payment.entity';
 import { GetnetClient } from '../src/modules/payments/getnet.client';
 import { PaymentsService } from '../src/modules/payments/payments.service';
 import { Plan } from '../src/modules/plan/entities/plan.entity';
@@ -77,6 +84,7 @@ const entities = [
 
 interface Fixture {
   order: Order;
+  buyer: User;
   sellers: [User, User];
 }
 
@@ -97,6 +105,12 @@ describe('Getnet webhook con PostgreSQL', () => {
   let transactionRepository: Repository<WalletTransaction>;
   let notificationRepository: Repository<Notification>;
   let attemptRepository: Repository<PaymentAttempt>;
+  let paymentRepository: Repository<Payment>;
+
+  const getnetClient = {
+    createPaymentIntent: jest.fn(),
+    getLoaderUrl: jest.fn(),
+  } as unknown as GetnetClient;
 
   beforeAll(async () => {
     if (!database.endsWith('_test')) {
@@ -129,6 +143,7 @@ describe('Getnet webhook con PostgreSQL', () => {
     transactionRepository = dataSource.getRepository(WalletTransaction);
     notificationRepository = dataSource.getRepository(Notification);
     attemptRepository = dataSource.getRepository(PaymentAttempt);
+    paymentRepository = dataSource.getRepository(Payment);
 
     const notificationsService = new NotificationsService(
       notificationRepository,
@@ -152,10 +167,7 @@ describe('Getnet webhook con PostgreSQL', () => {
       walletService,
       {} as CloudinaryService,
       notificationsService,
-      {
-        createPaymentIntent: jest.fn(),
-        getLoaderUrl: jest.fn(),
-      } as unknown as GetnetClient,
+      getnetClient,
       dataSource,
     );
   });
@@ -317,7 +329,328 @@ describe('Getnet webhook con PostgreSQL', () => {
     await expectWalletBalances(fixture.sellers, [0, 0]);
   });
 
-  async function seedFixture(): Promise<Fixture> {
+  describe('createGetnetOrder con PostgreSQL', () => {
+    beforeEach(() => {
+      getnetClient.createPaymentIntent = jest.fn(async () => ({
+        payment_intent_id: `intent-${randomUUID()}`,
+        checkout_url: 'https://checkout.uat.getnet.test/pay',
+      }));
+      (getnetClient.getLoaderUrl as jest.Mock).mockReturnValue(
+        'https://www.pre.globalgetnet.com/digital-checkout/loader.js',
+      );
+    });
+
+    it('el comprador correcto crea la intencion y deja intento y pago persistidos', async () => {
+      const fixture = await seedFixture();
+
+      const response = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+
+      expect(response.orderId).toBe(fixture.order.id);
+      expect(response.paymentIntentId).toBe(
+        (await reloadOrder(fixture.order.id)).paymentPreferenceId,
+      );
+      expect(response.checkoutType).toBe('redirect');
+      expect(response.checkoutUrl).toContain('https://');
+
+      const order = await reloadOrder(fixture.order.id);
+      expect(order.paymentStatus).toBe('PENDING');
+      expect(await attemptRepository.count()).toBe(1);
+      const attempt = await attemptRepository.findOneOrFail({
+        where: {},
+      });
+      expect(attempt.status).toBe(PaymentAttemptStatus.PENDING);
+      expect(attempt.externalPaymentId).toBe(response.paymentIntentId);
+      const payment = await paymentRepository.findOneOrFail({
+        where: { order: { id: fixture.order.id } },
+      });
+      expect(payment.status).toBe('PENDING');
+      expect(payment.method).toBe(PaymentMethod.GETNET);
+    });
+
+    it('rechaza a un comprador distinto sin crear intentos', async () => {
+      const fixture = await seedFixture();
+
+      await expect(
+        paymentsService.createGetnetOrder(
+          fixture.order.id,
+          randomUUID(),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(await attemptRepository.count()).toBe(0);
+      expect((await reloadOrder(fixture.order.id)).paymentPreferenceId).toBe(
+        fixture.order.paymentPreferenceId,
+      );
+    });
+
+    it('devuelve 404 para una orden inexistente', async () => {
+      await expect(
+        paymentsService.createGetnetOrder(randomUUID(), randomUUID()),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rechaza una orden que no usa Getnet', async () => {
+      const fixture = await seedFixture();
+      await orderRepository.update(
+        { id: fixture.order.id },
+        { paymentMethod: PaymentMethod.MERCADO_PAGO },
+      );
+
+      await expect(
+        paymentsService.createGetnetOrder(
+          fixture.order.id,
+          fixture.buyer.id,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(getnetClient.createPaymentIntent).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una orden que no esta pendiente', async () => {
+      const fixture = await seedFixture();
+      await orderRepository.update(
+        { id: fixture.order.id },
+        { status: OrderStatus.PAID },
+      );
+
+      await expect(
+        paymentsService.createGetnetOrder(
+          fixture.order.id,
+          fixture.buyer.id,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(getnetClient.createPaymentIntent).not.toHaveBeenCalled();
+    });
+
+    it('reutiliza el intento pendiente vigente en llamadas secuenciales', async () => {
+      const fixture = await seedFixture();
+
+      const first = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+      const second = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+
+      expect(second.paymentIntentId).toBe(first.paymentIntentId);
+      expect(getnetClient.createPaymentIntent).toHaveBeenCalledTimes(1);
+      expect(await attemptRepository.count()).toBe(1);
+    });
+
+    it('serializa dos creaciones concurrentes en una sola intencion externa', async () => {
+      const fixture = await seedFixture();
+      let intentsCreated = 0;
+      getnetClient.createPaymentIntent = jest.fn(async () => {
+        intentsCreated += 1;
+        // Simula la latencia del proveedor para forzar la contienda del lock.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return {
+          payment_intent_id: `intent-concurrente`,
+          checkout_url: 'https://checkout.uat.getnet.test/pay',
+        };
+      });
+
+      const [first, second] = await Promise.all([
+        paymentsService.createGetnetOrder(fixture.order.id, fixture.buyer.id),
+        paymentsService.createGetnetOrder(fixture.order.id, fixture.buyer.id),
+      ]);
+
+      expect(intentsCreated).toBe(1);
+      expect(first.paymentIntentId).toBe('intent-concurrente');
+      expect(second.paymentIntentId).toBe('intent-concurrente');
+      expect(await attemptRepository.count()).toBe(1);
+    });
+
+    it('crea una nueva intencion cuando la anterior expiro', async () => {
+      const fixture = await seedFixture();
+      const first = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+      // Fuerza vencimiento del intento vigente.
+      await attemptRepository.update(
+        { externalPaymentId: first.paymentIntentId },
+        { expiresAt: new Date(Date.now() - 1000) },
+      );
+
+      const second = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+
+      expect(second.paymentIntentId).not.toBe(first.paymentIntentId);
+      expect(getnetClient.createPaymentIntent).toHaveBeenCalledTimes(2);
+      const statuses = (await attemptRepository.find())
+        .filter((attempt) => attempt.externalPaymentId === first.paymentIntentId)
+        .map((attempt) => attempt.status);
+      expect(statuses).toEqual([PaymentAttemptStatus.EXPIRED]);
+    });
+
+    it('crea una nueva intencion cuando la anterior fue rechazada', async () => {
+      const fixture = await seedFixture();
+      const first = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+      await attemptRepository.update(
+        { externalPaymentId: first.paymentIntentId },
+        { status: PaymentAttemptStatus.REJECTED },
+      );
+
+      const second = await paymentsService.createGetnetOrder(
+        fixture.order.id,
+        fixture.buyer.id,
+      );
+
+      expect(second.paymentIntentId).not.toBe(first.paymentIntentId);
+      expect(getnetClient.createPaymentIntent).toHaveBeenCalledTimes(2);
+    });
+
+    it('propaga el fallo del proveedor y registra evidencia ERROR fuera del rollback', async () => {
+      const fixture = await seedFixture();
+      getnetClient.createPaymentIntent = jest
+        .fn()
+        .mockRejectedValue(new Error('getnet 503'));
+
+      await expect(
+        paymentsService.createGetnetOrder(fixture.order.id, fixture.buyer.id),
+      ).rejects.toThrow('getnet 503');
+
+      const order = await reloadOrder(fixture.order.id);
+      expect(order.status).toBe(OrderStatus.PENDING);
+      expect(order.paymentPreferenceId).toBe(fixture.order.paymentPreferenceId);
+
+      const errorAttempt = await attemptRepository.findOneOrFail({
+        where: { status: PaymentAttemptStatus.ERROR },
+      });
+      expect(errorAttempt.externalPaymentId ?? null).toBeNull();
+      expect(errorAttempt.metadata?.stage).toBe('create_payment_intent');
+      expect(errorAttempt.metadata?.failure).toBe('provider_error');
+    });
+  });
+
+  it('registra evidencia separada cuando falla la acreditacion y no muta datos', async () => {
+    const fixture = await seedFixture({ withAttempt: true });
+    const originalCredit = walletService.creditFromOrder.bind(walletService);
+    const creditSpy = jest
+      .spyOn(walletService, 'creditFromOrder')
+      .mockRejectedValue(new Error('forced wallet failure'));
+
+    await expect(
+      paymentsService.handleGetnetWebhook(
+        authorization,
+        authorizedPayload(fixture.order),
+      ),
+    ).rejects.toThrow('forced wallet failure');
+
+    creditSpy.mockRestore();
+
+    const order = await reloadOrder(fixture.order.id);
+    expect(order.status).toBe(OrderStatus.PENDING);
+    expect(await transactionRepository.count()).toBe(0);
+    expect(await notificationRepository.count()).toBe(0);
+    await expectWalletBalances(fixture.sellers, [0, 0]);
+
+    // Evidencia persistida DESPUES del rollback, en operacion separada.
+    const attempt = await attemptRepository.findOneOrFail({
+      where: { externalPaymentId: fixture.order.paymentPreferenceId },
+    });
+    expect(attempt.metadata?.failure).toBe('processing_failed');
+    expect(attempt.lastNotifiedAt).toBeInstanceOf(Date);
+  });
+
+  it('recupera notificaciones aprobadas perdidas reenviando el mismo webhook', async () => {
+    const fixture = await seedFixture();
+    const payload = authorizedPayload(fixture.order);
+    const saveSpy = jest
+      .spyOn(notificationRepository, 'save')
+      .mockRejectedValueOnce(new Error('notifications down'));
+
+    await expect(
+      paymentsService.handleGetnetWebhook(authorization, payload),
+    ).rejects.toThrow('notifications down');
+
+    // La orden quedo pagada y las billeteras acreditadas aunque fallearan los
+    // avisos. createManyOnce crea en paralelo: con un fallo puntual pueden
+    // haber quedado algunas notificaciones, pero nunca las cinco completas.
+    expect((await reloadOrder(fixture.order.id)).status).toBe(OrderStatus.PAID);
+    expect(await transactionRepository.count()).toBe(2);
+    await expectWalletBalances(fixture.sellers, [900, 475]);
+    expect(await notificationRepository.count()).toBeLessThan(5);
+
+    saveSpy.mockRestore();
+    // Reintento de Getnet: no reacredita y recupera las notificaciones.
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+
+    await expectApproved(fixture);
+    await expectWalletBalances(fixture.sellers, [900, 475]);
+
+    // Tercera entrega: nada cambia.
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+    expect(await notificationRepository.count()).toBe(5);
+    expect(await transactionRepository.count()).toBe(2);
+  });
+
+  it('recupera la notificacion de rechazo perdida reenviando el mismo webhook', async () => {
+    const fixture = await seedFixture();
+    const payload = deniedPayload(fixture.order);
+    const saveSpy = jest
+      .spyOn(notificationRepository, 'save')
+      .mockRejectedValueOnce(new Error('notifications down'));
+
+    await expect(
+      paymentsService.handleGetnetWebhook(authorization, payload),
+    ).rejects.toThrow('notifications down');
+
+    expect((await reloadOrder(fixture.order.id)).status).toBe(
+      OrderStatus.REJECTED,
+    );
+    expect(await notificationRepository.count()).toBe(0);
+
+    saveSpy.mockRestore();
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+    expect(await notificationRepository.count()).toBe(1);
+
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+    expect(await notificationRepository.count()).toBe(1);
+  });
+
+  it('el esquema sincronizado contiene las columnas e indice definidos por la migracion', async () => {
+    // Paridad entidad <-> migracion: el schema generado por synchronize()
+    // debe exponer exactamente lo que agrega
+    // AddGetnetWebCheckoutAttemptFields (columnas camelCase e indice con
+    // nombre fijado en la entidad).
+    const columns = (
+      await dataSource.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = 'payment_attempts'`,
+      )
+    ).map((row: { column_name: string }) => row.column_name);
+
+    for (const column of [
+      'idempotencyKey',
+      'externalPaymentId',
+      'providerPaymentId',
+      'rawStatus',
+      'checkoutUrl',
+      'lastNotifiedAt',
+      'metadata',
+    ]) {
+      expect(columns).toContain(column);
+    }
+
+    const indexes = (
+      await dataSource.query(
+        `SELECT indexname FROM pg_indexes WHERE tablename = 'payment_attempts'`,
+      )
+    ).map((row: { indexname: string }) => row.indexname);
+    expect(indexes).toContain('IDX_payment_attempts_provider_payment_id');
+  });
+
+  async function seedFixture(options: { withAttempt?: boolean } = {}): Promise<Fixture> {
     const planRepository = dataSource.getRepository(Plan);
     const userRepository = dataSource.getRepository(User);
     const categoryRepository = dataSource.getRepository(Category);
@@ -426,7 +759,27 @@ describe('Getnet webhook con PostgreSQL', () => {
       }),
     ]);
 
-    return { order, sellers: [sellerA, sellerB] };
+    if (options.withAttempt) {
+      const payment = await paymentRepository.save(
+        paymentRepository.create({
+          method: PaymentMethod.GETNET,
+          status: PaymentStatus.PENDING,
+          amount: 1500,
+          order,
+        }),
+      );
+      await attemptRepository.save(
+        attemptRepository.create({
+          idempotencyKey: randomUUID(),
+          status: PaymentAttemptStatus.PENDING,
+          externalPaymentId: order.paymentPreferenceId,
+          expiresAt: new Date(Date.now() + 3_600_000),
+          payment,
+        }),
+      );
+    }
+
+    return { order, buyer, sellers: [sellerA, sellerB] };
   }
 
   function authorizedPayload(order: Order) {
