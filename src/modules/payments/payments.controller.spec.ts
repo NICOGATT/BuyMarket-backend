@@ -72,19 +72,20 @@ describe('PaymentsController', () => {
     );
   });
 
-  it('responde 204 sin cuerpo al webhook de Getnet', async () => {
-    paymentsService.handleGetnetWebhook.mockResolvedValue(undefined);
+  it('responde 200 OK al webhook de Getnet', async () => {
+    paymentsService.handleGetnetWebhook.mockResolvedValue({ received: true });
 
-    await request(app.getHttpServer())
+    const response = await request(app.getHttpServer())
       .post('/payments/getnet/webhook')
       .set('Authorization', 'Basic valid')
-      .send({ order_id: 'order-1' })
-      .expect(204)
-      .expect('');
+      .send({ order_id: 'order-1', status: 'APPROVED' })
+      .expect(200);
+
+    expect(response.body).toEqual({ received: true });
 
     expect(paymentsService.handleGetnetWebhook).toHaveBeenCalledWith(
       'Basic valid',
-      { order_id: 'order-1' },
+      { order_id: 'order-1', status: 'APPROVED' },
     );
   });
 

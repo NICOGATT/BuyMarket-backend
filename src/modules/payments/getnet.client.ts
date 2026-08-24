@@ -7,41 +7,30 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+export const DEFAULT_GETNET_PAYMENT_INTENT_PATH =
+  '/digital-checkout/v1/payment-intent';
+
+/**
+ * Cuerpo documentado por el manual vigente de Web Checkout Global
+ * (creacion simplificada de pago). Las URLs de success/error/callback no se
+ * envian por operacion: se configuran una vez en el portal de Getnet.
+ */
 export interface GetnetPaymentIntentRequest {
-  mode: 'instant';
   order_id: string;
-  configurations: {
-    '3ds': boolean;
-    preauthorization: boolean;
-    card_verification: boolean;
-    success_url?: string;
-    error_url?: string;
+  customer: {
+    first_name: string;
+    last_name: string;
+    email?: string;
   };
   payment: {
     currency: 'ARS';
     amount: number;
   };
-  product: Array<{
-    product_type: 'physical_goods';
-    title: string;
-    description?: string;
-    value: number;
-    quantity: number;
-  }>;
-  customer: {
-    customer_id: string;
-    first_name: string;
-    last_name: string;
-    name: string;
-    email?: string;
-    document_type: 'DNI';
-    checked_email: boolean;
-  };
-  expires_at?: string;
 }
 
 export interface GetnetPaymentIntentResponse {
   payment_intent_id: string;
+  checkout_url?: string;
 }
 
 interface GetnetTokenCache {
@@ -52,10 +41,14 @@ interface GetnetTokenCache {
 @Injectable()
 export class GetnetClient {
   private readonly logger = new Logger(GetnetClient.name);
-  private readonly timeoutMs = 10_000;
+  private readonly timeoutMs: number;
   private tokenCache: GetnetTokenCache | null = null;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) {
+    const configured = Number(this.configService.get<string>('GETNET_TIMEOUT_MS'));
+    this.timeoutMs =
+      Number.isFinite(configured) && configured > 0 ? configured : 10_000;
+  }
 
   async createPaymentIntent(
     payload: GetnetPaymentIntentRequest,
@@ -68,8 +61,9 @@ export class GetnetClient {
     }
 
     if (!response.ok) {
+      const detail = await this.safeErrorDetail(response);
       this.logger.error(
-        `Getnet payment intent request failed with status ${response.status}`,
+        `Getnet payment intent request failed with status ${response.status}${detail ? ` detail=${detail}` : ''}`,
       );
       throw new BadGatewayException(
         'Getnet no pudo crear la intencion de pago',
@@ -84,18 +78,30 @@ export class GetnetClient {
       throw new BadGatewayException('Getnet devolvio una respuesta invalida');
     }
 
-    return { payment_intent_id: result.payment_intent_id };
+    return {
+      payment_intent_id: result.payment_intent_id,
+      checkout_url: this.nonEmptyString(result.checkout_url),
+    };
   }
 
   getLoaderUrl() {
     return `${this.getBaseUrl('GETNET_WEB_URL')}/digital-checkout/loader.js`;
   }
 
+  getPaymentIntentPath() {
+    const configured = this.configService
+      .get<string>('GETNET_PAYMENT_INTENT_PATH')
+      ?.trim();
+
+    const path = configured || DEFAULT_GETNET_PAYMENT_INTENT_PATH;
+    return path.startsWith('/') ? path : `/${path}`;
+  }
+
   private async sendPaymentIntent(payload: GetnetPaymentIntentRequest) {
     const accessToken = await this.getAccessToken();
 
     return this.fetchWithTimeout(
-      `${this.getApiUrl()}/dpy/web-checkout/v1/payment-intent`,
+      `${this.getApiUrl()}${this.getPaymentIntentPath()}`,
       {
         method: 'POST',
         headers: {
@@ -156,6 +162,22 @@ export class GetnetClient {
     return token.access_token;
   }
 
+  private async safeErrorDetail(response: Response) {
+    try {
+      const text = await response.text();
+      // Se recorta y se limpian posibles tokens que pudieran venir en el body.
+      return text
+        .replace(/"(access_token|client_secret|token)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+        .slice(0, 300);
+    } catch {
+      return '';
+    }
+  }
+
+  private nonEmptyString(value?: string) {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
   private getApiUrl() {
     return this.getBaseUrl('GETNET_API_URL');
   }
@@ -187,7 +209,7 @@ export class GetnetClient {
         throw new GatewayTimeoutException('Getnet no respondio a tiempo');
       }
 
-      this.logger.error('Could not connect to Getnet');
+      this.logger.error(`Could not connect to Getnet at ${url}`);
       throw new ServiceUnavailableException('No se pudo conectar con Getnet');
     }
   }

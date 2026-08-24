@@ -89,10 +89,10 @@ export class PaymentsController {
   }
 
   @Post('getnet/webhook')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   handleGetnetWebhook(
     @Headers('authorization') authorization: string | undefined,
-    @Body() body: any,
+    @Body() body: unknown,
   ) {
     return this.paymentsService.handleGetnetWebhook(authorization, body);
   }
