@@ -30,6 +30,7 @@ import { UserPaymentMethodsModule } from './modules/user-payment-methods/user-pa
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { BrandsModule } from './modules/brands/brands.module';
 import { ColorsModule } from './modules/colors/colors.module';
+import { resolveDatabaseSynchronize } from './config/database-synchronize';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -49,8 +50,12 @@ import { ColorsModule } from './modules/colors/colors.module';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
-        // En produccion debe configurarse DB_SYNCHRONIZE=false y usar migraciones.
-        synchronize: config.get<string>('DB_SYNCHRONIZE') !== 'false',
+        // Produccion siempre false; fuera de produccion solo con
+        // DB_SYNCHRONIZE explicito. Ver src/config/database-synchronize.ts.
+        synchronize: resolveDatabaseSynchronize({
+          nodeEnv: config.get<string>('NODE_ENV'),
+          dbSynchronize: config.get<string | boolean>('DB_SYNCHRONIZE'),
+        }),
         ssl:
           config.get<string>('NODE_ENV') === 'production'
             ? { rejectUnauthorized: false }
