@@ -1,7 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ObjectLiteral, Repository } from 'typeorm';
 
 import {
   WalletTransaction,
@@ -18,11 +18,11 @@ import { WalletService } from './wallet.service';
 import { User } from '../users/entity/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 
-type MockRepository<T = unknown> = Partial<
+type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
 >;
 
-const createMockRepository = <T = unknown>(): MockRepository<T> => ({
+const createMockRepository = <T extends ObjectLiteral = ObjectLiteral>(): MockRepository<T> => ({
   create: jest.fn(),
   find: jest.fn(),
   findOne: jest.fn(),
@@ -255,6 +255,91 @@ describe('WalletService', () => {
         wallet: walletToCredit,
         transaction: createdTransaction,
       });
+    });
+
+    it('reutiliza el movimiento existente sin incrementar el saldo', async () => {
+      const walletToCredit = createWallet({
+        balance: 1000,
+        totalEarned: 2000,
+      });
+      const existingTransaction = {
+        id: 'existing-transaction',
+        wallet: walletToCredit,
+        order: { id: orderId },
+        type: WalletTransactionType.CREDIT,
+      } as WalletTransaction;
+      walletsRepository.findOne?.mockResolvedValue(walletToCredit);
+      transactionRepository.findOne?.mockResolvedValue(existingTransaction);
+
+      const result = await service.creditFromOrder({
+        userId,
+        orderId,
+        amount: 1000,
+        commisionPercentage: 10,
+      });
+
+      expect(walletToCredit.balance).toBe(1000);
+      expect(walletToCredit.totalEarned).toBe(2000);
+      expect(walletsRepository.save).not.toHaveBeenCalled();
+      expect(transactionRepository.save).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        wallet: walletToCredit,
+        transaction: existingTransaction,
+      });
+    });
+
+    it('usa repositorios y bloqueo pesimista cuando recibe un EntityManager', async () => {
+      const walletToCredit = createWallet({ balance: 0, totalEarned: 0 });
+      const transactionalWallets = createMockRepository<Wallet>();
+      const transactionalTransactions =
+        createMockRepository<WalletTransaction>();
+      const createdTransaction = {
+        id: 'transaction-1',
+        wallet: walletToCredit,
+      } as WalletTransaction;
+      transactionalWallets.findOne?.mockResolvedValue(walletToCredit);
+      transactionalWallets.save?.mockResolvedValue(walletToCredit);
+      transactionalTransactions.findOne?.mockResolvedValue(null);
+      transactionalTransactions.create?.mockReturnValue(createdTransaction);
+      transactionalTransactions.save?.mockResolvedValue(createdTransaction);
+      const manager = {
+        getRepository: jest.fn((entity) =>
+          entity === Wallet ? transactionalWallets : transactionalTransactions,
+        ),
+      };
+      const walletQuery = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        setLock: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(walletToCredit),
+      };
+      transactionalWallets.createQueryBuilder = jest
+        .fn()
+        .mockReturnValue(walletQuery);
+
+      await service.creditFromOrder(
+        {
+          userId,
+          orderId,
+          amount: 1000,
+          commisionPercentage: 10,
+        },
+        manager as never,
+      );
+
+      expect(transactionalWallets.createQueryBuilder).toHaveBeenCalledWith(
+        'wallet',
+      );
+      expect(walletQuery.innerJoin).toHaveBeenCalledWith('wallet.user', 'user');
+      expect(walletQuery.where).toHaveBeenCalledWith('user.id = :userId', {
+        userId,
+      });
+      expect(walletQuery.setLock).toHaveBeenCalledWith('pessimistic_write');
+      expect(walletsRepository.save).not.toHaveBeenCalled();
+      expect(transactionalWallets.save).toHaveBeenCalledWith(walletToCredit);
+      expect(transactionalTransactions.save).toHaveBeenCalledWith(
+        createdTransaction,
+      );
     });
   });
 

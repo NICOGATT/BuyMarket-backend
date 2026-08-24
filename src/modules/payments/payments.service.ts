@@ -15,7 +15,7 @@ import {
   Preference,
 } from 'mercadopago';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   Order,
   OrderStatus,
@@ -53,6 +53,22 @@ interface GetnetWebhookBody {
   };
 }
 
+type GetnetFinalStatus = 'AUTHORIZED' | 'DENIED';
+
+interface SellerPaymentSummary {
+  sellerId: string;
+  grossAmount: number;
+  netAmount: number;
+  productTitles: string[];
+}
+
+interface GetnetWebhookTransition {
+  order?: Order;
+  sellers: SellerPaymentSummary[];
+  notifyApproved: boolean;
+  notifyRejected: boolean;
+}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -74,6 +90,8 @@ export class PaymentsService {
     private readonly notificationsService: NotificationsService,
 
     private readonly getnetClient: GetnetClient,
+
+    private readonly dataSource: DataSource,
   ) {
     this.client = new MercadoPagoConfig({
       accessToken: this.configService.get<string>('MP_ACCESS_TOKEN')!,
@@ -390,50 +408,7 @@ export class PaymentsService {
   }
 
   async creditSellersFromOrder(order: Order, shouldCredit: boolean) {
-    const amountsBySeller = new Map<
-      string,
-      { amount: number; commissionPercentage: number; productTitles: string[] }
-    >();
-
-    for (const item of order.items ?? []) {
-      const seller = item.product?.seller;
-
-      if (!seller?.id) {
-        continue;
-      }
-
-      const subtotal = Number(
-        item.subtotal ?? Number(item.unitPrice) * item.quantity,
-      );
-      const current = amountsBySeller.get(seller.id);
-      const commissionPercentage = Number(
-        seller.plan?.commissionPercentage ?? 0,
-      );
-
-      amountsBySeller.set(seller.id, {
-        amount: (current?.amount ?? 0) + subtotal,
-        commissionPercentage,
-        productTitles: [...(current?.productTitles ?? []), item.product.title],
-      });
-    }
-
-    for (const [sellerId, data] of amountsBySeller) {
-      if (shouldCredit) {
-        await this.walletService.creditFromOrder({
-          userId: sellerId,
-          orderId: order.id,
-          amount: data.amount,
-          commisionPercentage: data.commissionPercentage,
-        });
-      }
-    }
-
-    return Array.from(amountsBySeller, ([sellerId, data]) => ({
-      sellerId,
-      grossAmount: data.amount,
-      netAmount: data.amount - data.amount * (data.commissionPercentage / 100),
-      productTitles: data.productTitles,
-    }));
+    return this.creditSellersFromOrderWithManager(order, shouldCredit);
   }
 
   async notifyApprovedOrder(
@@ -611,7 +586,19 @@ export class PaymentsService {
     }
 
     const result = await this.getnetClient.createPaymentIntent({
+      mode: 'instant',
       order_id: order.id,
+      configurations: {
+        '3ds': true,
+        preauthorization: false,
+        card_verification: false,
+        success_url:
+          this.configService.get<string>('GETNET_SUCCESS_URL')?.trim() ||
+          undefined,
+        error_url:
+          this.configService.get<string>('GETNET_ERROR_URL')?.trim() ||
+          undefined,
+      },
       payment: {
         currency: 'ARS',
         amount: this.toCents(order.total),
@@ -632,6 +619,8 @@ export class PaymentsService {
         document_type: 'DNI',
         checked_email: order.buyer.isEmailVerified,
       },
+      expires_at:
+        this.configService.get<string>('GETNET_EXPIRES_AT')?.trim() ?? '1h',
     });
 
     order.paymentPreferenceId = result.payment_intent_id;
@@ -647,84 +636,259 @@ export class PaymentsService {
   ) {
     this.validateGetnetWebhookAuthorization(authorization);
 
-    const orderId = body?.order_id;
-    const paymentIntentId = body?.payment_intent_id;
-    const paymentStatus = body?.payment?.result?.status;
+    const orderId = this.nonEmptyString(body?.order_id);
+    const paymentIntentId = this.nonEmptyString(body?.payment_intent_id);
+    const rawStatus = this.nonEmptyString(body?.payment?.result?.status);
+    const paymentStatus = this.normalizeGetnetFinalStatus(rawStatus);
 
-    if (!orderId || !paymentIntentId || !paymentStatus) {
-      this.logger.warn('Ignoring an incomplete Getnet webhook');
-      return { received: true };
+    if (!orderId || !paymentIntentId || !rawStatus) {
+      this.logIgnoredGetnetWebhook('incomplete_payload', {
+        orderId,
+        paymentIntentId,
+        status: rawStatus,
+      });
+      return;
     }
 
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, paymentMethod: PaymentMethod.GETNET },
-      relations: ['buyer', 'items', 'items.product', 'items.product.seller'],
+    if (!paymentStatus) {
+      this.logIgnoredGetnetWebhook('unsupported_status', {
+        orderId,
+        paymentIntentId,
+        status: rawStatus,
+      });
+      return;
+    }
+
+    const paymentId = this.nonEmptyString(body.payment?.result?.payment_id);
+    if (paymentStatus === 'AUTHORIZED' && !paymentId) {
+      this.logIgnoredGetnetWebhook('authorized_without_payment_id', {
+        orderId,
+        paymentIntentId,
+        status: rawStatus,
+      });
+      return;
+    }
+
+    const transition = await this.dataSource.transaction((manager) =>
+      this.applyGetnetWebhookTransition(manager, {
+        orderId,
+        paymentIntentId,
+        paymentId,
+        paymentStatus,
+        amount: body.payment?.amount,
+        currency: body.payment?.currency,
+      }),
+    );
+
+    if (!transition.order) {
+      return;
+    }
+
+    this.logger.log(
+      `Processed Getnet webhook orderId=${transition.order.id} paymentIntentId=${paymentIntentId} paymentId=${paymentId ?? '-'} status=${paymentStatus}`,
+    );
+
+    if (transition.notifyApproved) {
+      await this.notifyApprovedOrder(transition.order, transition.sellers);
+    }
+
+    if (transition.notifyRejected) {
+      await this.notifyRejectedPayment(transition.order);
+    }
+  }
+
+  private async applyGetnetWebhookTransition(
+    manager: EntityManager,
+    event: {
+      orderId: string;
+      paymentIntentId: string;
+      paymentId?: string;
+      paymentStatus: GetnetFinalStatus;
+      amount?: number;
+      currency?: string;
+    },
+  ): Promise<GetnetWebhookTransition> {
+    const orderRepository = manager.getRepository(Order);
+    const lockedOrder = await orderRepository.findOne({
+      where: { id: event.orderId, paymentMethod: PaymentMethod.GETNET },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!lockedOrder) {
+      this.logIgnoredGetnetWebhook('unknown_order', event);
+      return this.emptyGetnetTransition();
+    }
+
+    const order = await orderRepository.findOne({
+      where: { id: lockedOrder.id },
+      relations: [
+        'buyer',
+        'items',
+        'items.product',
+        'items.product.seller',
+        'items.product.seller.plan',
+      ],
     });
 
     if (!order) {
-      this.logger.warn(`Ignoring Getnet webhook for unknown order ${orderId}`);
-      return { received: true };
+      throw new Error(`Locked Getnet order ${lockedOrder.id} disappeared`);
     }
 
-    if (order.paymentPreferenceId !== paymentIntentId) {
-      this.logger.warn(
-        `Ignoring mismatched Getnet intent for order ${orderId}`,
-      );
-      return { received: true };
+    if (order.paymentPreferenceId !== event.paymentIntentId) {
+      this.logIgnoredGetnetWebhook('payment_intent_mismatch', event);
+      return this.emptyGetnetTransition();
     }
 
     if (
-      body.payment?.currency !== 'ARS' ||
-      body.payment.amount !== this.toCents(order.total)
+      event.currency !== 'ARS' ||
+      typeof event.amount !== 'number' ||
+      !Number.isInteger(event.amount) ||
+      event.amount !== this.toCents(order.total)
     ) {
-      throw new BadRequestException(
-        'El monto o la moneda del pago Getnet no coincide con la orden',
-      );
+      this.logIgnoredGetnetWebhook('amount_or_currency_mismatch', event);
+      return this.emptyGetnetTransition();
     }
 
-    if (paymentStatus !== 'Authorized' && paymentStatus !== 'Denied') {
-      this.logger.warn(`Ignoring unknown Getnet status ${paymentStatus}`);
-      return { received: true };
+    if (event.paymentStatus === 'DENIED') {
+      if (order.status === OrderStatus.PAID) {
+        this.logIgnoredGetnetWebhook('paid_order_cannot_be_denied', event);
+        return this.emptyGetnetTransition();
+      }
+
+      order.paymentId = event.paymentId ?? order.paymentId;
+      order.paymentStatus = 'Denied';
+      order.status = OrderStatus.REJECTED;
+      await orderRepository.save(order);
+      return {
+        order,
+        sellers: [],
+        notifyApproved: false,
+        notifyRejected: true,
+      };
     }
 
     const wasAlreadyPaid = order.status === OrderStatus.PAID;
-    const wasAlreadyRejected = order.status === OrderStatus.REJECTED;
-
-    if (paymentStatus === 'Authorized') {
-      if (!body.payment?.result?.payment_id) {
-        throw new BadRequestException(
-          'El webhook autorizado de Getnet no tiene payment_id',
-        );
-      }
-
-      order.paymentId = body.payment.result.payment_id;
-      order.paymentStatus = paymentStatus;
+    if (!wasAlreadyPaid) {
+      order.paymentId = event.paymentId;
+      order.paymentStatus = 'Authorized';
       order.status = OrderStatus.PAID;
-      await this.orderRepository.save(order);
+      await orderRepository.save(order);
+    }
 
-      if (wasAlreadyPaid) {
-        return { received: true };
+    const sellers = await this.creditSellersFromOrderWithManager(
+      order,
+      !wasAlreadyPaid,
+      manager,
+    );
+    return {
+      order,
+      sellers,
+      notifyApproved: true,
+      notifyRejected: false,
+    };
+  }
+
+  private async creditSellersFromOrderWithManager(
+    order: Order,
+    shouldCredit: boolean,
+    manager?: EntityManager,
+  ) {
+    const amountsBySeller = this.sellerAmountsFromOrder(order);
+
+    for (const [sellerId, data] of amountsBySeller) {
+      if (shouldCredit) {
+        const params = {
+          userId: sellerId,
+          orderId: order.id,
+          amount: data.amount,
+          commisionPercentage: data.commissionPercentage,
+        };
+        if (manager) {
+          await this.walletService.creditFromOrder(params, manager);
+        } else {
+          await this.walletService.creditFromOrder(params);
+        }
       }
-
-      const sellers = await this.creditSellersFromOrder(order, true);
-      await this.notifyApprovedOrder(order, sellers);
-      return { received: true };
     }
 
-    if (wasAlreadyPaid) {
-      return { received: true };
+    return this.sellerSummaries(amountsBySeller);
+  }
+
+  private sellerAmountsFromOrder(order: Order) {
+    const amountsBySeller = new Map<
+      string,
+      { amount: number; commissionPercentage: number; productTitles: string[] }
+    >();
+
+    for (const item of order.items ?? []) {
+      const seller = item.product?.seller;
+      if (!seller?.id) continue;
+
+      const subtotal = Number(
+        item.subtotal ?? Number(item.unitPrice) * item.quantity,
+      );
+      const current = amountsBySeller.get(seller.id);
+      const commissionPercentage = Number(
+        seller.plan?.commissionPercentage ?? 0,
+      );
+      amountsBySeller.set(seller.id, {
+        amount: (current?.amount ?? 0) + subtotal,
+        commissionPercentage,
+        productTitles: [...(current?.productTitles ?? []), item.product.title],
+      });
     }
 
-    order.paymentId = body.payment?.result?.payment_id ?? order.paymentId;
-    order.paymentStatus = paymentStatus;
-    order.status = OrderStatus.REJECTED;
-    await this.orderRepository.save(order);
+    return amountsBySeller;
+  }
 
-    if (!wasAlreadyRejected) {
-      await this.notifyRejectedPayment(order);
-    }
+  private sellerSummaries(
+    amountsBySeller: Map<
+      string,
+      { amount: number; commissionPercentage: number; productTitles: string[] }
+    >,
+  ): SellerPaymentSummary[] {
+    return Array.from(amountsBySeller, ([sellerId, data]) => ({
+      sellerId,
+      grossAmount: data.amount,
+      netAmount: data.amount - data.amount * (data.commissionPercentage / 100),
+      productTitles: data.productTitles,
+    }));
+  }
 
-    return { received: true };
+  private emptyGetnetTransition(): GetnetWebhookTransition {
+    return {
+      sellers: [],
+      notifyApproved: false,
+      notifyRejected: false,
+    };
+  }
+
+  private normalizeGetnetFinalStatus(
+    status?: string,
+  ): GetnetFinalStatus | undefined {
+    const normalized = status?.trim().toUpperCase();
+    return normalized === 'AUTHORIZED' || normalized === 'DENIED'
+      ? normalized
+      : undefined;
+  }
+
+  private nonEmptyString(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private logIgnoredGetnetWebhook(
+    reason: string,
+    context: {
+      orderId?: string;
+      paymentIntentId?: string;
+      paymentId?: string;
+      paymentStatus?: string;
+      status?: string;
+    },
+  ) {
+    this.logger.warn(
+      `Ignored Getnet webhook reason=${reason} orderId=${context.orderId ?? '-'} paymentIntentId=${context.paymentIntentId ?? '-'} paymentId=${context.paymentId ?? '-'} status=${context.paymentStatus ?? context.status ?? '-'}`,
+    );
   }
 
   private getnetPaymentIntentResponse(

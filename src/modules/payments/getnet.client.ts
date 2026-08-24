@@ -8,7 +8,15 @@ import {
 import { ConfigService } from '@nestjs/config';
 
 export interface GetnetPaymentIntentRequest {
+  mode: 'instant';
   order_id: string;
+  configurations: {
+    '3ds': boolean;
+    preauthorization: boolean;
+    card_verification: boolean;
+    success_url?: string;
+    error_url?: string;
+  };
   payment: {
     currency: 'ARS';
     amount: number;
@@ -29,6 +37,7 @@ export interface GetnetPaymentIntentRequest {
     document_type: 'DNI';
     checked_email: boolean;
   };
+  expires_at?: string;
 }
 
 export interface GetnetPaymentIntentResponse {

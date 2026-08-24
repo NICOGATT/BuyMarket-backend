@@ -7,7 +7,15 @@ import { GetnetClient, GetnetPaymentIntentRequest } from './getnet.client';
 
 describe('GetnetClient', () => {
   const payload: GetnetPaymentIntentRequest = {
+    mode: 'instant',
     order_id: 'order-1',
+    configurations: {
+      '3ds': true,
+      preauthorization: false,
+      card_verification: false,
+      success_url: 'https://front.test.com/getnet/success',
+      error_url: 'https://front.test.com/getnet/error',
+    },
     payment: { currency: 'ARS', amount: 10000 },
     product: [
       {
@@ -25,6 +33,7 @@ describe('GetnetClient', () => {
       document_type: 'DNI',
       checked_email: true,
     },
+    expires_at: '1h',
   };
 
   const response = (status: number, body: unknown) =>

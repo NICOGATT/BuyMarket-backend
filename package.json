@@ -18,6 +18,12 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:getnet:smoke": "powershell -ExecutionPolicy Bypass -File scripts/test-getnet-webhook-smoke.ps1",
+    "start:getnet:local": "powershell -ExecutionPolicy Bypass -File scripts/start-getnet-local.ps1",
+    "getnet:tunnel": "powershell -ExecutionPolicy Bypass -File scripts/start-getnet-tunnel.ps1",
+    "test:db:up": "docker compose -p buymarket-webhook-test -f docker-compose.test.yml up -d --wait",
+    "test:getnet:integration": "jest --config ./test/jest-getnet-integration.json --runInBand",
+    "test:db:down": "docker compose -p buymarket-webhook-test -f docker-compose.test.yml down -v --remove-orphans",
     "backfill:subcategory-attributes": "ts-node scripts/backfill-subcategory-attribute-applies-to.ts",
     "backfill:variant-colors": "ts-node scripts/backfill-variant-colors.ts"
   },

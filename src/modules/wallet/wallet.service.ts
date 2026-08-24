@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThanOrEqual, Repository } from 'typeorm';
+import { EntityManager, LessThanOrEqual, Repository } from 'typeorm';
 
 import { Wallet } from './entity/wallet.entity';
 import {
@@ -151,15 +151,35 @@ export class WalletService {
     return wallet;
   }
 
-  async creditFromOrder(params: {
-    userId: string;
-    orderId: string;
-    amount: number;
-    commisionPercentage: number;
-  }) {
-    const wallet = await this.findByUserId(params.userId);
+  async creditFromOrder(
+    params: {
+      userId: string;
+      orderId: string;
+      amount: number;
+      commisionPercentage: number;
+    },
+    manager?: EntityManager,
+  ) {
+    const walletsRepository = manager
+      ? manager.getRepository(Wallet)
+      : this.walletsRepository;
+    const transactionRepository = manager
+      ? manager.getRepository(WalletTransaction)
+      : this.transactionRepository;
+    const wallet = manager
+      ? await walletsRepository
+          .createQueryBuilder('wallet')
+          .innerJoin('wallet.user', 'user')
+          .where('user.id = :userId', { userId: params.userId })
+          .setLock('pessimistic_write')
+          .getOne()
+      : await this.findByUserId(params.userId);
 
-    const existingTransaction = await this.transactionRepository.findOne({
+    if (!wallet) {
+      throw new NotFoundException('Billetera no encontrada');
+    }
+
+    const existingTransaction = await transactionRepository.findOne({
       where: {
         wallet: { id: wallet.id },
         order: { id: params.orderId },
@@ -179,9 +199,9 @@ export class WalletService {
 
     wallet.totalEarned = Number(wallet.totalEarned) + Number(netAmount);
 
-    await this.walletsRepository.save(wallet);
+    await walletsRepository.save(wallet);
 
-    const transaction = this.transactionRepository.create({
+    const transaction = transactionRepository.create({
       wallet,
       order: {
         id: params.orderId,
@@ -194,7 +214,7 @@ export class WalletService {
       effectiveAt: new Date(),
     });
 
-    await this.transactionRepository.save(transaction);
+    await transactionRepository.save(transaction);
 
     return {
       wallet,

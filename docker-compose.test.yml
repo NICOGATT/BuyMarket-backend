@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: 'no'
+    ports:
+      - '127.0.0.1:55432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: buymarket_webhook_test
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d buymarket_webhook_test']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - getnet_test_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  getnet_test_postgres_data:

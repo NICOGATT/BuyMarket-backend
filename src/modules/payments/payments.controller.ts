@@ -4,6 +4,7 @@ import {
   Catch,
   Controller,
   ExceptionFilter,
+  HttpCode,
   HttpStatus,
   Headers,
   Get,
@@ -88,6 +89,7 @@ export class PaymentsController {
   }
 
   @Post('getnet/webhook')
+  @HttpCode(HttpStatus.NO_CONTENT)
   handleGetnetWebhook(
     @Headers('authorization') authorization: string | undefined,
     @Body() body: any,

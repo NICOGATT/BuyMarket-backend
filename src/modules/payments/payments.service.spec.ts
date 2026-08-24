@@ -6,7 +6,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ObjectLiteral, Repository } from 'typeorm';
+import { DataSource, ObjectLiteral, Repository } from 'typeorm';
 
 import {
   Order,
@@ -60,6 +60,8 @@ describe('PaymentsService', () => {
     createPaymentIntent: jest.Mock;
     getLoaderUrl: jest.Mock;
   };
+  let dataSource: { transaction: jest.Mock };
+  let transactionManager: { getRepository: jest.Mock };
 
   const buyerId = 'bdb0526e-0ee2-473d-8daa-a6e63c811f8f';
   const orderId = '559b0806-5ec7-4669-b512-370136e57b8b';
@@ -145,6 +147,15 @@ describe('PaymentsService', () => {
           'https://www.pre.globalgetnet.com/digital-checkout/loader.js',
         ),
     };
+    transactionManager = {
+      getRepository: jest.fn((entity) => {
+        if (entity === Order) return orderRepository;
+        throw new Error(`Repositorio transaccional no configurado: ${entity}`);
+      }),
+    };
+    dataSource = {
+      transaction: jest.fn((callback) => callback(transactionManager)),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -161,6 +172,8 @@ describe('PaymentsService', () => {
                 FRONTEND_PENDING_URL: 'https://front.test.com/pending',
                 GETNET_WEBHOOK_USERNAME: 'getnet-user',
                 GETNET_WEBHOOK_PASSWORD: 'getnet-password',
+                GETNET_SUCCESS_URL: 'https://front.test.com/getnet/success',
+                GETNET_ERROR_URL: 'https://front.test.com/getnet/error',
               };
 
               return values[key];
@@ -190,6 +203,10 @@ describe('PaymentsService', () => {
         {
           provide: GetnetClient,
           useValue: getnetClient,
+        },
+        {
+          provide: DataSource,
+          useValue: dataSource,
         },
       ],
     }).compile();
@@ -490,7 +507,15 @@ describe('PaymentsService', () => {
       const result = await service.createGetnetOrder(orderId, buyerId);
 
       expect(getnetClient.createPaymentIntent).toHaveBeenCalledWith({
+        mode: 'instant',
         order_id: orderId,
+        configurations: {
+          '3ds': true,
+          preauthorization: false,
+          card_verification: false,
+          success_url: 'https://front.test.com/getnet/success',
+          error_url: 'https://front.test.com/getnet/error',
+        },
         payment: { currency: 'ARS', amount: 150000 },
         product: [
           {
@@ -517,6 +542,7 @@ describe('PaymentsService', () => {
           document_type: 'DNI',
           checked_email: true,
         },
+        expires_at: '1h',
       });
       expect(order.paymentPreferenceId).toBe('getnet-intent-1');
       expect(order.paymentStatus).toBe('Pending');
@@ -591,6 +617,31 @@ describe('PaymentsService', () => {
       expect(orderRepository.findOne).not.toHaveBeenCalled();
     });
 
+    it('rechaza credenciales Basic Auth incorrectas', async () => {
+      const invalidAuthorization = `Basic ${Buffer.from(
+        'getnet-user:wrong-password',
+      ).toString('base64')}`;
+
+      await expect(
+        service.handleGetnetWebhook(
+          invalidAuthorization,
+          createGetnetWebhook('Authorized'),
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('ignora payloads incompletos autenticados', async () => {
+      await expect(
+        service.handleGetnetWebhook(authorization, {
+          order_id: orderId,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(orderRepository.findOne).not.toHaveBeenCalled();
+    });
+
     it('confirma un pago autorizado y acredita una sola vez', async () => {
       const order = createGetnetOrder();
       orderRepository.findOne?.mockResolvedValue(order);
@@ -601,12 +652,30 @@ describe('PaymentsService', () => {
           authorization,
           createGetnetWebhook('Authorized'),
         ),
-      ).resolves.toEqual({ received: true });
+      ).resolves.toBeUndefined();
 
       expect(order.status).toBe(OrderStatus.PAID);
       expect(order.paymentId).toBe('getnet-payment-1');
       expect(order.paymentStatus).toBe('Authorized');
       expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(orderRepository.findOne).toHaveBeenNthCalledWith(1, {
+        where: { id: orderId, paymentMethod: PaymentMethod.GETNET },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(orderRepository.findOne).toHaveBeenNthCalledWith(2, {
+        where: { id: orderId },
+        relations: [
+          'buyer',
+          'items',
+          'items.product',
+          'items.product.seller',
+          'items.product.seller.plan',
+        ],
+      });
+      expect(walletService.creditFromOrder).toHaveBeenCalledWith(
+        expect.objectContaining({ commisionPercentage: 10 }),
+        transactionManager,
+      );
 
       orderRepository.findOne?.mockResolvedValue(order);
       jest.clearAllMocks();
@@ -615,7 +684,39 @@ describe('PaymentsService', () => {
         createGetnetWebhook('Authorized'),
       );
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
-      expect(notificationsService.createManyOnce).not.toHaveBeenCalled();
+      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(1);
+    });
+
+    it('serializa dos webhooks autorizados concurrentes sin duplicar creditos', async () => {
+      const order = createGetnetOrder();
+      orderRepository.findOne?.mockResolvedValue(order);
+      orderRepository.save?.mockResolvedValue(order);
+      let transactionQueue = Promise.resolve();
+      dataSource.transaction.mockImplementation((callback) => {
+        const result = transactionQueue.then(() =>
+          callback(transactionManager),
+        );
+        transactionQueue = result.then(
+          () => undefined,
+          () => undefined,
+        );
+        return result;
+      });
+
+      await Promise.all([
+        service.handleGetnetWebhook(
+          authorization,
+          createGetnetWebhook('Authorized'),
+        ),
+        service.handleGetnetWebhook(
+          authorization,
+          createGetnetWebhook('Authorized'),
+        ),
+      ]);
+
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(2);
     });
 
     it('marca la orden como rechazada sin acreditar vendedores', async () => {
@@ -641,9 +742,12 @@ describe('PaymentsService', () => {
         createGetnetWebhook('Authorized'),
       );
 
-      orderRepository.findOne?.mockResolvedValueOnce(
-        createGetnetOrder({ paymentPreferenceId: 'another-intent' }),
-      );
+      const mismatchedOrder = createGetnetOrder({
+        paymentPreferenceId: 'another-intent',
+      });
+      orderRepository.findOne
+        ?.mockResolvedValueOnce(mismatchedOrder)
+        .mockResolvedValueOnce(mismatchedOrder);
       await service.handleGetnetWebhook(
         authorization,
         createGetnetWebhook('Authorized'),
@@ -653,14 +757,14 @@ describe('PaymentsService', () => {
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
     });
 
-    it('rechaza montos o monedas que no coinciden', async () => {
+    it('ignora montos o monedas que no coinciden', async () => {
       orderRepository.findOne?.mockResolvedValue(createGetnetOrder());
       const webhook = createGetnetWebhook('Authorized');
       webhook.payment.amount = 1;
 
       await expect(
         service.handleGetnetWebhook(authorization, webhook),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).resolves.toBeUndefined();
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
     });
 
@@ -671,8 +775,69 @@ describe('PaymentsService', () => {
 
       await expect(
         service.handleGetnetWebhook(authorization, webhook),
-      ).resolves.toEqual({ received: true });
+      ).resolves.toBeUndefined();
       expect(orderRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('normaliza estados en mayusculas', async () => {
+      const order = createGetnetOrder();
+      orderRepository.findOne?.mockResolvedValue(order);
+      orderRepository.save?.mockResolvedValue(order);
+      const webhook = createGetnetWebhook('Authorized');
+      webhook.payment.result.status = 'AUTHORIZED' as 'Authorized';
+
+      await service.handleGetnetWebhook(authorization, webhook);
+
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+    });
+
+    it('ignora una autorizacion sin payment_id', async () => {
+      const webhook = createGetnetWebhook('Authorized');
+      webhook.payment.result.payment_id = '';
+
+      await expect(
+        service.handleGetnetWebhook(authorization, webhook),
+      ).resolves.toBeUndefined();
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(orderRepository.findOne).not.toHaveBeenCalled();
+    });
+
+    it('no revierte una orden pagada cuando llega un Denied posterior', async () => {
+      const order = createGetnetOrder({ status: OrderStatus.PAID });
+      order.paymentId = 'getnet-payment-1';
+      order.paymentStatus = 'Authorized';
+      orderRepository.findOne?.mockResolvedValue(order);
+
+      await service.handleGetnetWebhook(
+        authorization,
+        createGetnetWebhook('Denied'),
+      );
+
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(order.paymentStatus).toBe('Authorized');
+      expect(orderRepository.save).not.toHaveBeenCalled();
+      expect(notificationsService.createOnce).not.toHaveBeenCalled();
+    });
+
+    it('propaga fallos transaccionales para que Getnet reintente', async () => {
+      const order = createGetnetOrder();
+      orderRepository.findOne?.mockResolvedValue(order);
+      orderRepository.save?.mockResolvedValue(order);
+      walletService.creditFromOrder.mockRejectedValueOnce(
+        new Error('wallet unavailable'),
+      );
+
+      await expect(
+        service.handleGetnetWebhook(
+          authorization,
+          createGetnetWebhook('Authorized'),
+        ),
+      ).rejects.toThrow('wallet unavailable');
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(notificationsService.createManyOnce).not.toHaveBeenCalled();
     });
   });
 

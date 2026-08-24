@@ -1,4 +1,6 @@
+import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import request from 'supertest';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { GetnetQrService } from './getnet-qr.service';
@@ -6,7 +8,11 @@ import { PaymentStatus } from './entity/payment.entity';
 
 describe('PaymentsController', () => {
   let controller: PaymentsController;
-  let paymentsService: { updateManualPaymentStatus: jest.Mock };
+  let app: INestApplication;
+  let paymentsService: {
+    updateManualPaymentStatus: jest.Mock;
+    handleGetnetWebhook: jest.Mock;
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -37,7 +43,11 @@ describe('PaymentsController', () => {
 
     controller = module.get<PaymentsController>(PaymentsController);
     paymentsService = module.get(PaymentsService);
+    app = module.createNestApplication();
+    await app.init();
   });
+
+  afterEach(() => app.close());
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
@@ -60,5 +70,32 @@ describe('PaymentsController', () => {
       'order-1',
       { status: PaymentStatus.COMPLETED },
     );
+  });
+
+  it('responde 204 sin cuerpo al webhook de Getnet', async () => {
+    paymentsService.handleGetnetWebhook.mockResolvedValue(undefined);
+
+    await request(app.getHttpServer())
+      .post('/payments/getnet/webhook')
+      .set('Authorization', 'Basic valid')
+      .send({ order_id: 'order-1' })
+      .expect(204)
+      .expect('');
+
+    expect(paymentsService.handleGetnetWebhook).toHaveBeenCalledWith(
+      'Basic valid',
+      { order_id: 'order-1' },
+    );
+  });
+
+  it('responde 401 si el servicio rechaza la autenticacion del webhook', async () => {
+    paymentsService.handleGetnetWebhook.mockRejectedValue(
+      new UnauthorizedException('Credenciales de webhook invalidas'),
+    );
+
+    await request(app.getHttpServer())
+      .post('/payments/getnet/webhook')
+      .send({ order_id: 'order-1' })
+      .expect(401);
   });
 });

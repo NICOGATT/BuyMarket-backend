@@ -956,18 +956,119 @@ GETNET_CLIENT_SECRET=
 # Elegidas por BuyMarket y configuradas también en el Merchant Portal
 GETNET_WEBHOOK_USERNAME=
 GETNET_WEBHOOK_PASSWORD=
+
+# Navegación del iframe y vencimiento del payment intent
+GETNET_SUCCESS_URL=https://app.example.com/payments/getnet/success
+GETNET_ERROR_URL=https://app.example.com/payments/getnet/error
+GETNET_EXPIRES_AT=1h
 ```
 
-En producción deben usarse `https://api.globalgetnet.com` y
-`https://www.globalgetnet.com`. El callback que debe registrarse en Technical
-Configuration es:
+El host preproductivo habilitado puede depender de la cuenta de homologación;
+debe confirmarse con las credenciales entregadas antes de cambiar
+`GETNET_API_URL`. En producción deben usarse los hosts productivos habilitados
+por Getnet. El callback que debe registrarse en Technical Configuration es:
 
 ```text
 {BACKEND_URL}/payments/getnet/webhook
 ```
 
 El callback utiliza HTTP Basic Auth con `GETNET_WEBHOOK_USERNAME` y
-`GETNET_WEBHOOK_PASSWORD`.
+`GETNET_WEBHOOK_PASSWORD`. Debe estar publicado por HTTPS con un certificado
+válido. Las credenciales del webhook son secretos propios del callback y deben
+coincidir exactamente con las configuradas en Getnet.
+
+El endpoint responde `204 No Content` cuando procesa o descarta de forma segura
+una notificación. Responde `401` si Basic Auth es inválida y deja pasar errores
+`5xx` cuando falla el procesamiento interno, para que Getnet reintente la
+entrega. No se deben registrar el header `Authorization`, secretos ni el payload
+completo.
+
+El backend valida `order_id`, `payment_intent_id`, monto en centavos y moneda
+`ARS`. Los estados `Authorized`/`AUTHORIZED` confirman la orden y los estados
+`Denied`/`DENIED` la rechazan. La actualización de la orden y la acreditación de
+las billeteras se realizan dentro de una única transacción con bloqueo de la
+orden. Por eso, una entrega repetida o concurrente no genera créditos dobles y
+una orden pagada no vuelve al estado rechazado.
+
+Para comprobar solamente conectividad y autenticación en homologación puede
+enviarse un payload incompleto; una credencial válida debe obtener `204` sin
+cuerpo y una inválida debe obtener `401`:
+
+```bash
+curl -i -u "$GETNET_WEBHOOK_USERNAME:$GETNET_WEBHOOK_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  "$BACKEND_URL/payments/getnet/webhook"
+```
+
+La homologación funcional debe incluir un pago autorizado, uno denegado y el
+reenvío del mismo evento. La orden y las billeteras se verifican en la base de
+datos; la pantalla de retorno del iframe no es una confirmación de pago. Véanse
+también los [requisitos oficiales de webhooks de Getnet](https://docs.globalgetnet.com/en/products/online-payments/regional-api?doc=webhook-how-it-works).
+
+### Pruebas locales del webhook
+
+La prueba manual usa la misma PostgreSQL descartable de la integración. Primero
+se levanta la base y, en una terminal separada, se inicia el backend con
+variables de proceso que reemplazan la conexión normal sin modificar `.env`:
+
+```powershell
+npm run test:db:up
+$env:GETNET_WEBHOOK_USERNAME = "usuario_local"
+$env:GETNET_WEBHOOK_PASSWORD = "clave_local"
+npm run start:getnet:local
+```
+
+En otra terminal se pasan las mismas credenciales para comprobar el endpoint:
+
+```powershell
+$env:GETNET_WEBHOOK_USERNAME = "usuario_local"
+$env:GETNET_WEBHOOK_PASSWORD = "clave_local"
+npm run test:getnet:smoke
+```
+
+También puede ejecutarse directamente:
+
+```powershell
+.\scripts\test-getnet-webhook-smoke.ps1 `
+  -Username "usuario_local" `
+  -Password "clave_local"
+```
+
+El script exige `204` con credenciales válidas y `401` con una contraseña
+incorrecta. Al terminar se detiene el backend y se ejecuta
+`npm run test:db:down`.
+
+La prueba de integración usa solamente la PostgreSQL definida en
+`docker-compose.test.yml`. Escucha en `127.0.0.1:55432`, usa la base
+`buymarket_webhook_test` y rechaza ejecutar `dropSchema` si el nombre no termina
+en `_test` o si el host no es `localhost`/loopback:
+
+```powershell
+npm run test:db:up
+npm run test:getnet:integration
+npm run test:db:down
+```
+
+`test:db:down` elimina exclusivamente el proyecto Compose
+`buymarket-webhook-test` y su volumen descartable. La suite siembra dos
+vendedores con comisiones diferentes y comprueba aprobación, concurrencia,
+rollback, reintento, monotonicidad, notificaciones únicas y eventos
+inconsistentes.
+
+Para recibir una notificación real desde Getnet Homologación, instalar
+[`cloudflared`](https://developers.cloudflare.com/tunnel/downloads/), iniciar el
+backend y ejecutar:
+
+```powershell
+npm run getnet:tunnel
+```
+
+El comando muestra una URL aleatoria `trycloudflare.com`. En Getnet se registra
+esa URL con `/payments/getnet/webhook` y las mismas credenciales Basic Auth. Los
+[Quick Tunnels](https://developers.cloudflare.com/tunnel/setup/#quick-tunnels-development)
+son únicamente para desarrollo y cambian al reiniciar; una homologación
+recurrente debe usar un túnel nombrado con hostname estable.
 
 ### Contrato del checkout
 
