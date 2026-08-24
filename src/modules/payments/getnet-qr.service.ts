@@ -24,6 +24,10 @@ import {
 } from './entity/payment-attempt.entity';
 import { GetnetQrClient, GetnetQrPayment } from './getnet-qr.client';
 import { PaymentsService } from './payments.service';
+import {
+  getnetAmountToPesos,
+  toGetnetAmount,
+} from './getnet-money.util';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -121,11 +125,10 @@ export class GetnetQrService {
         requestId: attempt.id,
         orderId: order.id,
         paymentId: attempt.id,
-        amount: this.toCents(order.total),
+        amount: toGetnetAmount(this.configService, order.total),
         customerId: order.buyer.id,
         customerEmail: order.buyer.email,
-      });
-      attempt.externalPaymentId = result.paymentId;
+      });      attempt.externalPaymentId = result.paymentId;
       attempt.qrPayload = result.qrPayload;
       attempt.expiresAt = this.resolveExpiration(result.expiresAt);
       await this.attemptRepository.save(attempt);
@@ -263,7 +266,10 @@ export class GetnetQrService {
       (!provider.orderId || provider.orderId === order.id) &&
       (!provider.currency || provider.currency === 'ARS') &&
       (provider.amount === undefined ||
-        provider.amount === this.toCents(order.total))
+        Math.abs(
+          getnetAmountToPesos(this.configService, provider.amount) -
+            Number(order.total),
+        ) <= 0.005)
     );
   }
 
@@ -329,9 +335,5 @@ export class GetnetQrService {
       expiresAt: attempt.expiresAt.toISOString(),
       paymentStatus: PaymentStatus.PENDING,
     };
-  }
-
-  private toCents(value: number | string) {
-    return Math.round(Number(value) * 100);
   }
 }

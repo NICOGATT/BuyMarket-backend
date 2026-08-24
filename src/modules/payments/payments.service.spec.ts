@@ -1,6 +1,8 @@
 import {
+  BadGatewayException,
   BadRequestException,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +20,10 @@ import {
   Payment as PaymentEntity,
   PaymentStatus,
 } from './entity/payment.entity';
+import {
+  PaymentAttempt,
+  PaymentAttemptStatus,
+} from './entity/payment-attempt.entity';
 import { PaymentsService } from './payments.service';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -61,12 +67,22 @@ describe('PaymentsService', () => {
     getLoaderUrl: jest.Mock;
   };
   let dataSource: { transaction: jest.Mock };
+  let txOrderRepository: MockRepository<Order>;
+  let txPaymentRepository: MockRepository<PaymentEntity>;
+  let txAttemptRepository: {
+    findOne: jest.Mock;
+    save: jest.Mock;
+    create: jest.Mock;
+  };
+  let attemptsStore: PaymentAttempt[];
   let transactionManager: { getRepository: jest.Mock };
 
   const buyerId = 'bdb0526e-0ee2-473d-8daa-a6e63c811f8f';
   const orderId = '559b0806-5ec7-4669-b512-370136e57b8b';
   const sellerId = 'a3b08f39-e5e4-4907-a43a-cef3248e2bb2';
   const secondSellerId = '7a4db075-b46b-4c39-bb37-1e9a8a87e73d';
+
+  let configValues: Record<string, string | undefined>;
 
   const buyer = {
     id: buyerId,
@@ -147,9 +163,37 @@ describe('PaymentsService', () => {
           'https://www.pre.globalgetnet.com/digital-checkout/loader.js',
         ),
     };
+    attemptsStore = [];
+    configValues = {
+      MP_ACCESS_TOKEN: 'fake-access-token',
+      BACKEND_URL: 'https://api.test.com',
+      FRONTEND_SUCCESS_URL: 'https://front.test.com/success',
+      FRONTEND_FAILURE_URL: 'https://front.test.com/failure',
+      FRONTEND_PENDING_URL: 'https://front.test.com/pending',
+      GETNET_WEBHOOK_USERNAME: 'getnet-user',
+      GETNET_WEBHOOK_PASSWORD: 'getnet-password',
+      GETNET_CHECKOUT_TYPE: 'redirect',
+      GETNET_AMOUNT_UNIT: 'cents',
+    };
+    txOrderRepository = createMockRepository<Order>();
+    txPaymentRepository = {
+      ...createMockRepository<PaymentEntity>(),
+      create: jest.fn((data) => data),
+      save: jest.fn(async (saved) => saved),
+    };
+    txAttemptRepository = {
+      findOne: jest.fn(),
+      save: jest.fn(async (attempt) => {
+        if (!attemptsStore.includes(attempt)) attemptsStore.push(attempt);
+        return attempt;
+      }),
+      create: jest.fn((data) => data),
+    };
     transactionManager = {
       getRepository: jest.fn((entity) => {
-        if (entity === Order) return orderRepository;
+        if (entity === Order) return txOrderRepository;
+        if (entity === PaymentEntity) return txPaymentRepository;
+        if (entity === PaymentAttempt) return txAttemptRepository;
         throw new Error(`Repositorio transaccional no configurado: ${entity}`);
       }),
     };
@@ -163,21 +207,7 @@ describe('PaymentsService', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn((key: string) => {
-              const values: Record<string, string> = {
-                MP_ACCESS_TOKEN: 'fake-access-token',
-                BACKEND_URL: 'https://api.test.com',
-                FRONTEND_SUCCESS_URL: 'https://front.test.com/success',
-                FRONTEND_FAILURE_URL: 'https://front.test.com/failure',
-                FRONTEND_PENDING_URL: 'https://front.test.com/pending',
-                GETNET_WEBHOOK_USERNAME: 'getnet-user',
-                GETNET_WEBHOOK_PASSWORD: 'getnet-password',
-                GETNET_SUCCESS_URL: 'https://front.test.com/getnet/success',
-                GETNET_ERROR_URL: 'https://front.test.com/getnet/error',
-              };
-
-              return values[key];
-            }),
+            get: jest.fn((key: string) => configValues[key]),
           },
         },
         {
@@ -496,81 +526,225 @@ describe('PaymentsService', () => {
   });
 
   describe('createGetnetOrder', () => {
-    it('crea un payment intent global y devuelve el contrato del iframe', async () => {
-      const order = createOrder({ paymentMethod: PaymentMethod.GETNET });
-      orderRepository.findOne?.mockResolvedValue(order);
-      orderRepository.save?.mockResolvedValue(order);
+    const setupGetnetOrder = (overrides: Partial<Order> = {}) => {
+      const order = createOrder({
+        paymentMethod: PaymentMethod.GETNET,
+        ...overrides,
+      });
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txOrderRepository.save?.mockImplementation(async (saved) => saved);
+      return order;
+    };
+
+    it('crea la intencion con el body del manual y devuelve checkout redirect', async () => {
+      const order = setupGetnetOrder();
+      txPaymentRepository.findOne?.mockResolvedValue(null);
       getnetClient.createPaymentIntent.mockResolvedValue({
-        payment_intent_id: 'getnet-intent-1',
+        payment_intent_id: 'abc123',
+        checkout_url: 'https://checkout.pre.globalgetnet.com/s/abc123',
       });
 
       const result = await service.createGetnetOrder(orderId, buyerId);
 
+      expect(getnetClient.createPaymentIntent).toHaveBeenCalledTimes(1);
       expect(getnetClient.createPaymentIntent).toHaveBeenCalledWith({
-        mode: 'instant',
         order_id: orderId,
-        configurations: {
-          '3ds': true,
-          preauthorization: false,
-          card_verification: false,
-          success_url: 'https://front.test.com/getnet/success',
-          error_url: 'https://front.test.com/getnet/error',
-        },
-        payment: { currency: 'ARS', amount: 150000 },
-        product: [
-          {
-            product_type: 'physical_goods',
-            title: 'Notebook',
-            description: 'Notebook para trabajo',
-            value: 100000,
-            quantity: 1,
-          },
-          {
-            product_type: 'physical_goods',
-            title: 'Mouse',
-            description: 'Mouse inalambrico',
-            value: 25000,
-            quantity: 2,
-          },
-        ],
         customer: {
-          customer_id: buyerId,
           first_name: 'Nico',
           last_name: 'Gatti',
-          name: 'Nico Gatti',
           email: 'buyer@test.com',
-          document_type: 'DNI',
-          checked_email: true,
         },
-        expires_at: '1h',
+        payment: { currency: 'ARS', amount: 150000 },
       });
-      expect(order.paymentPreferenceId).toBe('getnet-intent-1');
-      expect(order.paymentStatus).toBe('Pending');
+      expect(txPaymentRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: PaymentMethod.GETNET,
+          status: PaymentStatus.PENDING,
+          amount: 1500,
+        }),
+      );
+      expect(order.paymentPreferenceId).toBe('abc123');
+      expect(order.paymentStatus).toBe('PENDING');
+
+      const attempt = attemptsStore[0];
+      expect(attempt.externalPaymentId).toBe('abc123');
+      expect(attempt.checkoutUrl).toBe(
+        'https://checkout.pre.globalgetnet.com/s/abc123',
+      );
+      expect(attempt.status).toBe(PaymentAttemptStatus.PENDING);
+      expect(attempt.idempotencyKey).toBeTruthy();
+      expect(attempt.expiresAt!.getTime()).toBeGreaterThan(Date.now());
+
       expect(result).toEqual({
         orderId,
-        paymentIntentId: 'getnet-intent-1',
+        paymentIntentId: 'abc123',
+        checkoutUrl: 'https://checkout.pre.globalgetnet.com/s/abc123',
+        checkoutType: 'redirect',
+      });
+    });
+
+    it('devuelve loader e iframe cuando la modalidad configurada es iframe', async () => {
+      const order = setupGetnetOrder();
+      txPaymentRepository.findOne?.mockResolvedValue(null);
+      configValues.GETNET_CHECKOUT_TYPE = 'iframe';
+      getnetClient.createPaymentIntent.mockResolvedValue({
+        payment_intent_id: 'abc123',
+        checkout_url: 'https://checkout.pre.globalgetnet.com/s/abc123',
+      });
+
+      const result = await service.createGetnetOrder(orderId, buyerId);
+
+      expect(result).toEqual({
+        orderId,
+        paymentIntentId: 'abc123',
+        checkoutType: 'iframe',
+        checkoutUrl: 'https://checkout.pre.globalgetnet.com/s/abc123',
+        loaderUrl:
+          'https://www.pre.globalgetnet.com/digital-checkout/loader.js',
+      });
+    });
+
+    it('degrada a iframe cuando Getnet no devuelve checkout_url', async () => {
+      setupGetnetOrder();
+      txPaymentRepository.findOne?.mockResolvedValue(null);
+      getnetClient.createPaymentIntent.mockResolvedValue({
+        payment_intent_id: 'solo-intent',
+      });
+
+      const result = await service.createGetnetOrder(orderId, buyerId);
+
+      expect(result).toEqual({
+        orderId,
+        paymentIntentId: 'solo-intent',
         checkoutType: 'iframe',
         loaderUrl:
           'https://www.pre.globalgetnet.com/digital-checkout/loader.js',
       });
     });
 
-    it('reutiliza un payment intent previamente guardado', async () => {
-      const order = createOrder({
-        paymentMethod: PaymentMethod.GETNET,
-        paymentPreferenceId: 'existing-intent',
+    it('reutiliza un intento pendiente vigente sin llamar a Getnet', async () => {
+      setupGetnetOrder();
+      const vigente = {
+        id: 'attempt-1',
+        idempotencyKey: 'key-1',
+        status: PaymentAttemptStatus.PENDING,
+        externalPaymentId: 'intent-vigente',
+        checkoutUrl: 'https://checkout/vigente',
+        expiresAt: new Date(Date.now() + 3_600_000),
+        createdAt: new Date(),
+      } as PaymentAttempt;
+      attemptsStore.push(vigente);
+      txPaymentRepository.findOne?.mockResolvedValue({
+        id: 'pay-1',
+        attempts: attemptsStore,
       });
-      orderRepository.findOne?.mockResolvedValue(order);
 
       const result = await service.createGetnetOrder(orderId, buyerId);
 
       expect(getnetClient.createPaymentIntent).not.toHaveBeenCalled();
-      expect(orderRepository.save).not.toHaveBeenCalled();
-      expect(result.paymentIntentId).toBe('existing-intent');
+      expect(txOrderRepository.save).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        orderId,
+        paymentIntentId: 'intent-vigente',
+        checkoutUrl: 'https://checkout/vigente',
+        checkoutType: 'redirect',
+      });
     });
 
-    it('rechaza una orden que no usa Getnet', async () => {
-      orderRepository.findOne?.mockResolvedValue(createOrder());
+    it('genera un nuevo intento cuando el anterior expiro', async () => {
+      setupGetnetOrder();
+      const expirado = {
+        id: 'attempt-old',
+        idempotencyKey: 'key-old',
+        status: PaymentAttemptStatus.PENDING,
+        externalPaymentId: 'intent-viejo',
+        expiresAt: new Date(Date.now() - 1_000),
+        createdAt: new Date(Date.now() - 3_600_000),
+      } as PaymentAttempt;
+      attemptsStore.push(expirado);
+      txPaymentRepository.findOne?.mockResolvedValue({
+        id: 'pay-1',
+        attempts: attemptsStore,
+      });
+      getnetClient.createPaymentIntent.mockResolvedValue({
+        payment_intent_id: 'intent-nuevo',
+        checkout_url: 'https://checkout/nuevo',
+      });
+
+      const result = await service.createGetnetOrder(orderId, buyerId);
+
+      expect(getnetClient.createPaymentIntent).toHaveBeenCalledTimes(1);
+      expect(expirado.status).toBe(PaymentAttemptStatus.EXPIRED);
+      expect(result.paymentIntentId).toBe('intent-nuevo');
+    });
+
+    it('serializa creaciones concurrentes en una sola intencion externa', async () => {
+      const order = setupGetnetOrder();
+      txPaymentRepository.findOne?.mockImplementation(async () => ({
+        id: 'pay-1',
+        attempts: attemptsStore,
+      }));
+      let queue = Promise.resolve();
+      dataSource.transaction.mockImplementation((callback) => {
+        const result = queue.then(() => callback(transactionManager));
+        queue = result.then(
+          () => undefined,
+          () => undefined,
+        );
+        return result;
+      });
+      let intentsCreated = 0;
+      getnetClient.createPaymentIntent.mockImplementation(async () => {
+        intentsCreated += 1;
+        return {
+          payment_intent_id: `intent-${intentsCreated}`,
+          checkout_url: `https://checkout/${intentsCreated}`,
+        };
+      });
+
+      const [first, second] = await Promise.all([
+        service.createGetnetOrder(orderId, buyerId),
+        service.createGetnetOrder(orderId, buyerId),
+      ]);
+
+      expect(intentsCreated).toBe(1);
+      expect(first.paymentIntentId).toBe('intent-1');
+      expect(second.paymentIntentId).toBe('intent-1');
+      expect(order.paymentPreferenceId).toBe('intent-1');
+    });
+
+    it('marca el intento como ERROR si Getnet falla y no actualiza la orden', async () => {
+      const order = setupGetnetOrder();
+      txPaymentRepository.findOne?.mockResolvedValue(null);
+      getnetClient.createPaymentIntent.mockRejectedValue(
+        new BadGatewayException('Getnet no pudo crear la intencion de pago'),
+      );
+
+      await expect(
+        service.createGetnetOrder(orderId, buyerId),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+
+      expect(attemptsStore[0].status).toBe(PaymentAttemptStatus.ERROR);
+      expect(order.paymentPreferenceId).toBeUndefined();
+    });
+
+    it('rechaza una orden inexistente o ajena', async () => {
+      txOrderRepository.findOne?.mockResolvedValue(null);
+
+      await expect(
+        service.createGetnetOrder(orderId, 'otro-comprador'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(getnetClient.createPaymentIntent).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una orden que no usa Getnet o no esta pendiente', async () => {
+      setupGetnetOrder({ status: OrderStatus.REJECTED });
+
+      await expect(
+        service.createGetnetOrder(orderId, buyerId),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      setupGetnetOrder({ paymentMethod: PaymentMethod.MERCADO_PAGO });
 
       await expect(
         service.createGetnetOrder(orderId, buyerId),
@@ -580,117 +754,218 @@ describe('PaymentsService', () => {
   });
 
   describe('handleGetnetWebhook', () => {
-    const authorization = `Basic ${Buffer.from(
+    const basicAuthorization = `Basic ${Buffer.from(
       'getnet-user:getnet-password',
     ).toString('base64')}`;
 
-    const createGetnetWebhook = (status: 'Authorized' | 'Denied') => ({
-      payment_intent_id: 'getnet-intent-1',
-      checkout_id: 'checkout-1',
-      order_id: orderId,
-      mode: 'instant',
-      payment: {
-        method: 'credit',
-        amount: 150000,
-        currency: 'ARS',
-        result: {
-          payment_id: 'getnet-payment-1',
-          status,
-        },
-      },
-    });
-
-    const createGetnetOrder = (overrides: Partial<Order> = {}) =>
+    const setupGetnetOrder = (overrides: Partial<Order> = {}) =>
       createOrder({
         paymentMethod: PaymentMethod.GETNET,
         paymentPreferenceId: 'getnet-intent-1',
         ...overrides,
-      });
+      }) as Order;
+
+    interface PayloadOptions {
+      status?: string;
+      amount?: number;
+      currency?: string;
+      paymentId?: string;
+    }
+
+    // Variante completa documentada previamente por Getnet (estados anidados).
+    const authorizedFullPayload = (id: string, opts: PayloadOptions = {}) => ({
+      payment_intent_id: 'getnet-intent-1',
+      checkout_id: 'checkout-1',
+      order_id: id,
+      mode: 'instant',
+      payment: {
+        method: 'credit',
+        amount: opts.amount ?? 150000,
+        currency: opts.currency ?? 'ARS',
+        result: {
+          payment_id: opts.paymentId ?? 'getnet-payment-1',
+          status: opts.status ?? 'AUTHORIZED',
+        },
+      },
+    });
+
+    // Variante simplificada confirmada en el manual vigente.
+    const authorizedSimplifiedPayload = (
+      id: string,
+      opts: PayloadOptions = {},
+    ) => ({
+      order_id: id,
+      payment_intent_id: 'getnet-intent-1',
+      status: opts.status ?? 'APPROVED',
+    });
+
+    const rejectedSimplifiedPayload = (id: string) => ({
+      order_id: id,
+      payment_intent_id: 'getnet-intent-1',
+      status: 'REJECTED',
+    });
+
+    const expectApprovedAndCredited = async (
+      result: { received: boolean },
+      order: Order,
+    ) => {
+      expect(result).toEqual({ received: true });
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(order.paymentStatus).toBe('APPROVED');
+      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
+      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(1);
+      const attempt = attemptsStore[0];
+      expect(attempt.status).toBe(PaymentAttemptStatus.APPROVED);
+      expect(attempt.rawStatus).toBeTruthy();
+      expect(attempt.lastNotifiedAt).toBeInstanceOf(Date);
+    };
 
     it('rechaza webhooks sin Basic Auth valida', async () => {
       await expect(
         service.handleGetnetWebhook(
           undefined,
-          createGetnetWebhook('Authorized'),
+          authorizedFullPayload(orderId),
         ),
       ).rejects.toBeInstanceOf(UnauthorizedException);
-      expect(orderRepository.findOne).not.toHaveBeenCalled();
+      expect(txOrderRepository.findOne).not.toHaveBeenCalled();
     });
 
     it('rechaza credenciales Basic Auth incorrectas', async () => {
-      const invalidAuthorization = `Basic ${Buffer.from(
-        'getnet-user:wrong-password',
-      ).toString('base64')}`;
-
       await expect(
         service.handleGetnetWebhook(
-          invalidAuthorization,
-          createGetnetWebhook('Authorized'),
+          `Basic ${Buffer.from('getnet-user:wrong').toString('base64')}`,
+          authorizedFullPayload(orderId),
         ),
       ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
-    it('ignora payloads incompletos autenticados', async () => {
+    it('falla controladamente cuando faltan credenciales configuradas', async () => {
+      delete configValues.GETNET_WEBHOOK_USERNAME;
+
       await expect(
-        service.handleGetnetWebhook(authorization, {
+        service.handleGetnetWebhook(basicAuthorization, {}),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it('acepta webhooks sin autorizacion solo con modo none fuera de produccion', async () => {
+      configValues.GETNET_WEBHOOK_AUTH_MODE = 'none';
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      const result = await service.handleGetnetWebhook(
+        undefined,
+        authorizedSimplifiedPayload(orderId),
+      );
+
+      expect(result).toEqual({ received: true });
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(walletService.creditFromOrder).toHaveBeenCalled();
+    });
+
+    it('prohibe el modo none en produccion', async () => {
+      configValues.GETNET_WEBHOOK_AUTH_MODE = 'none';
+      configValues.NODE_ENV = 'production';
+
+      await expect(
+        service.handleGetnetWebhook(undefined, authorizedFullPayload(orderId)),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('ignora payloads incompletos autenticados respondiendo received', async () => {
+      await expect(
+        service.handleGetnetWebhook(basicAuthorization, {
           order_id: orderId,
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ received: true });
 
       expect(dataSource.transaction).not.toHaveBeenCalled();
-      expect(orderRepository.findOne).not.toHaveBeenCalled();
+      expect(txOrderRepository.findOne).not.toHaveBeenCalled();
     });
 
-    it('confirma un pago autorizado y acredita una sola vez', async () => {
-      const order = createGetnetOrder();
-      orderRepository.findOne?.mockResolvedValue(order);
-      orderRepository.save?.mockResolvedValue(order);
-
+    it('ignora estados desconocidos sin romper', async () => {
       await expect(
         service.handleGetnetWebhook(
-          authorization,
-          createGetnetWebhook('Authorized'),
+          basicAuthorization,
+          authorizedFullPayload(orderId, { status: 'PENDING' }),
         ),
-      ).resolves.toBeUndefined();
-
-      expect(order.status).toBe(OrderStatus.PAID);
-      expect(order.paymentId).toBe('getnet-payment-1');
-      expect(order.paymentStatus).toBe('Authorized');
-      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
-      expect(orderRepository.findOne).toHaveBeenNthCalledWith(1, {
-        where: { id: orderId, paymentMethod: PaymentMethod.GETNET },
-        lock: { mode: 'pessimistic_write' },
-      });
-      expect(orderRepository.findOne).toHaveBeenNthCalledWith(2, {
-        where: { id: orderId },
-        relations: [
-          'buyer',
-          'items',
-          'items.product',
-          'items.product.seller',
-          'items.product.seller.plan',
-        ],
-      });
-      expect(walletService.creditFromOrder).toHaveBeenCalledWith(
-        expect.objectContaining({ commisionPercentage: 10 }),
-        transactionManager,
-      );
-
-      orderRepository.findOne?.mockResolvedValue(order);
-      jest.clearAllMocks();
-      await service.handleGetnetWebhook(
-        authorization,
-        createGetnetWebhook('Authorized'),
-      );
-      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
-      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(1);
+      ).resolves.toEqual({ received: true });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
-    it('serializa dos webhooks autorizados concurrentes sin duplicar creditos', async () => {
-      const order = createGetnetOrder();
-      orderRepository.findOne?.mockResolvedValue(order);
-      orderRepository.save?.mockResolvedValue(order);
+    it('ignora order_id con formato invalido sin consultar la base', async () => {
+      txOrderRepository.findOne?.mockClear();
+
+      await expect(
+        service.handleGetnetWebhook(basicAuthorization, {
+          order_id: 'inexistente',
+          payment_intent_id: 'intent-x',
+          status: 'APPROVED',
+        }),
+      ).resolves.toEqual({ received: true });
+
+      expect(txOrderRepository.findOne).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('aprueba con el payload simplificado APPROVED sin importe ni payment_id', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      await expectApprovedAndCredited(
+        await service.handleGetnetWebhook(
+          basicAuthorization,
+          authorizedSimplifiedPayload(orderId),
+        ),
+        order,
+      );
+    });
+
+    it('aprueba con la variante completa AUTHORIZED anidada', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      await expectApprovedAndCredited(
+        await service.handleGetnetWebhook(
+          basicAuthorization,
+          authorizedFullPayload(orderId),
+        ),
+        order,
+      );
+      expect(attemptsStore[0].providerPaymentId).toBe('getnet-payment-1');
+      expect(attemptsStore[0].rawStatus).toBe('AUTHORIZED');
+    });
+
+    it('no duplica creditos ni notificaciones ante un webhook duplicado', async () => {
+      const order = setupGetnetOrder({ status: OrderStatus.PAID });
+      order.paymentId = 'getnet-payment-1';
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      const first = await service.handleGetnetWebhook(
+        basicAuthorization,
+        authorizedFullPayload(orderId),
+      );
+      const second = await service.handleGetnetWebhook(
+        basicAuthorization,
+        authorizedFullPayload(orderId),
+      );
+
+      expect(first).toEqual({ received: true });
+      expect(second).toEqual({ received: true });
+      expect(order.status).toBe(OrderStatus.PAID);
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+      expect(notificationsService.createManyOnce).not.toHaveBeenCalled();
+    });
+
+    it('serializa dos webhooks aprobados concurrentes sin duplicar creditos', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
       let transactionQueue = Promise.resolve();
       dataSource.transaction.mockImplementation((callback) => {
         const result = transactionQueue.then(() =>
@@ -705,139 +980,152 @@ describe('PaymentsService', () => {
 
       await Promise.all([
         service.handleGetnetWebhook(
-          authorization,
-          createGetnetWebhook('Authorized'),
+          basicAuthorization,
+          authorizedFullPayload(orderId),
         ),
         service.handleGetnetWebhook(
-          authorization,
-          createGetnetWebhook('Authorized'),
+          basicAuthorization,
+          authorizedFullPayload(orderId),
         ),
       ]);
 
       expect(order.status).toBe(OrderStatus.PAID);
       expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
-      expect(notificationsService.createManyOnce).toHaveBeenCalledTimes(2);
     });
 
-    it('marca la orden como rechazada sin acreditar vendedores', async () => {
-      const order = createGetnetOrder();
-      orderRepository.findOne?.mockResolvedValue(order);
-      orderRepository.save?.mockResolvedValue(order);
+    it('rechaza con REJECTED simplificado sin acreditar vendedores', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
 
       await service.handleGetnetWebhook(
-        authorization,
-        createGetnetWebhook('Denied'),
+        basicAuthorization,
+        rejectedSimplifiedPayload(orderId),
       );
 
       expect(order.status).toBe(OrderStatus.REJECTED);
-      expect(order.paymentStatus).toBe('Denied');
+      expect(order.paymentStatus).toBe('REJECTED');
       expect(walletService.creditFromOrder).not.toHaveBeenCalled();
-      expect(notificationsService.createOnce).toHaveBeenCalled();
+      expect(notificationsService.createOnce).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'PAYMENT_REJECTED' }),
+      );
+      expect(attemptsStore[0].status).toBe(PaymentAttemptStatus.REJECTED);
     });
 
-    it('ignora ordenes e intents desconocidos', async () => {
-      orderRepository.findOne?.mockResolvedValueOnce(null);
+    it('rechaza con la variante completa DENIED anidada', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
       await service.handleGetnetWebhook(
-        authorization,
-        createGetnetWebhook('Authorized'),
+        basicAuthorization,
+        authorizedFullPayload(orderId, { status: 'DENIED' }),
       );
 
-      const mismatchedOrder = createGetnetOrder({
-        paymentPreferenceId: 'another-intent',
+      expect(order.status).toBe(OrderStatus.REJECTED);
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('ignora un rechazo posterior sobre una orden ya pagada', async () => {
+      const order = setupGetnetOrder({
+        status: OrderStatus.PAID,
+        paymentStatus: 'APPROVED',
       });
-      orderRepository.findOne
-        ?.mockResolvedValueOnce(mismatchedOrder)
-        .mockResolvedValueOnce(mismatchedOrder);
-      await service.handleGetnetWebhook(
-        authorization,
-        createGetnetWebhook('Authorized'),
-      );
-
-      expect(orderRepository.save).not.toHaveBeenCalled();
-      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
-    });
-
-    it('ignora montos o monedas que no coinciden', async () => {
-      orderRepository.findOne?.mockResolvedValue(createGetnetOrder());
-      const webhook = createGetnetWebhook('Authorized');
-      webhook.payment.amount = 1;
-
-      await expect(
-        service.handleGetnetWebhook(authorization, webhook),
-      ).resolves.toBeUndefined();
-      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
-    });
-
-    it('ignora estados futuros que todavia no reconoce', async () => {
-      orderRepository.findOne?.mockResolvedValue(createGetnetOrder());
-      const webhook = createGetnetWebhook('Authorized');
-      webhook.payment.result.status = 'Pending' as 'Authorized';
-
-      await expect(
-        service.handleGetnetWebhook(authorization, webhook),
-      ).resolves.toBeUndefined();
-      expect(orderRepository.save).not.toHaveBeenCalled();
-    });
-
-    it('normaliza estados en mayusculas', async () => {
-      const order = createGetnetOrder();
-      orderRepository.findOne?.mockResolvedValue(order);
-      orderRepository.save?.mockResolvedValue(order);
-      const webhook = createGetnetWebhook('Authorized');
-      webhook.payment.result.status = 'AUTHORIZED' as 'Authorized';
-
-      await service.handleGetnetWebhook(authorization, webhook);
-
-      expect(order.status).toBe(OrderStatus.PAID);
-      expect(walletService.creditFromOrder).toHaveBeenCalledTimes(2);
-    });
-
-    it('ignora una autorizacion sin payment_id', async () => {
-      const webhook = createGetnetWebhook('Authorized');
-      webhook.payment.result.payment_id = '';
-
-      await expect(
-        service.handleGetnetWebhook(authorization, webhook),
-      ).resolves.toBeUndefined();
-
-      expect(dataSource.transaction).not.toHaveBeenCalled();
-      expect(orderRepository.findOne).not.toHaveBeenCalled();
-    });
-
-    it('no revierte una orden pagada cuando llega un Denied posterior', async () => {
-      const order = createGetnetOrder({ status: OrderStatus.PAID });
       order.paymentId = 'getnet-payment-1';
-      order.paymentStatus = 'Authorized';
-      orderRepository.findOne?.mockResolvedValue(order);
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
 
       await service.handleGetnetWebhook(
-        authorization,
-        createGetnetWebhook('Denied'),
+        basicAuthorization,
+        authorizedFullPayload(orderId, { status: 'DENIED' }),
       );
 
       expect(order.status).toBe(OrderStatus.PAID);
-      expect(order.paymentStatus).toBe('Authorized');
-      expect(orderRepository.save).not.toHaveBeenCalled();
+      expect(order.paymentStatus).toBe('APPROVED');
       expect(notificationsService.createOnce).not.toHaveBeenCalled();
     });
 
+    it('no notifica dos veces un rechazo duplicado', async () => {
+      const order = setupGetnetOrder({ status: OrderStatus.REJECTED, paymentStatus: 'REJECTED' });
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      await service.handleGetnetWebhook(
+        basicAuthorization,
+        rejectedSimplifiedPayload(orderId),
+      );
+
+      expect(notificationsService.createOnce).not.toHaveBeenCalled();
+    });
+
+    it('ignora ordenes inexistentes e intents inconsistentes sin mutar datos', async () => {
+      txOrderRepository.findOne?.mockResolvedValueOnce(null);
+      await service.handleGetnetWebhook(
+        basicAuthorization,
+        authorizedFullPayload(orderId),
+      );
+
+      const mismatched = setupGetnetOrder({
+        paymentPreferenceId: 'otro-intent',
+      });
+      txOrderRepository.findOne?.mockResolvedValue(mismatched);
+      await service.handleGetnetWebhook(
+        basicAuthorization,
+        authorizedFullPayload(orderId),
+      );
+
+      expect(txOrderRepository.save).not.toHaveBeenCalled();
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+    });
+
+    it('ignora montos inconsistentes cuando el payload los incluye', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      await expect(
+        service.handleGetnetWebhook(
+          basicAuthorization,
+          authorizedFullPayload(orderId, { amount: 1 }),
+        ),
+      ).resolves.toEqual({ received: true });
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+      expect(txOrderRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('ignora monedas distintas de ARS cuando el payload la incluye', async () => {
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
+
+      await expect(
+        service.handleGetnetWebhook(
+          basicAuthorization,
+          authorizedFullPayload(orderId, { currency: 'USD' }),
+        ),
+      ).resolves.toEqual({ received: true });
+      expect(walletService.creditFromOrder).not.toHaveBeenCalled();
+    });
+
     it('propaga fallos transaccionales para que Getnet reintente', async () => {
-      const order = createGetnetOrder();
-      orderRepository.findOne?.mockResolvedValue(order);
-      orderRepository.save?.mockResolvedValue(order);
+      const order = setupGetnetOrder();
+      txOrderRepository.findOne?.mockResolvedValue(order);
+      txAttemptRepository.findOne.mockResolvedValue(undefined);
       walletService.creditFromOrder.mockRejectedValueOnce(
         new Error('wallet unavailable'),
       );
 
       await expect(
         service.handleGetnetWebhook(
-          authorization,
-          createGetnetWebhook('Authorized'),
+          basicAuthorization,
+          authorizedFullPayload(orderId),
         ),
       ).rejects.toThrow('wallet unavailable');
 
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(notificationsService.createManyOnce).not.toHaveBeenCalled();
+      // La evidencia del webhook queda persistida aunque el credito falle.
+      expect(attemptsStore[0].lastNotifiedAt).toBeInstanceOf(Date);
     });
   });
 

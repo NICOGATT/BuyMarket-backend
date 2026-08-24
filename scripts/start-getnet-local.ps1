@@ -19,6 +19,9 @@ $env:DB_DATABASE = "buymarket_webhook_test"
 $env:PORT = "$Port"
 $env:GETNET_WEBHOOK_USERNAME = $Username
 $env:GETNET_WEBHOOK_PASSWORD = $Password
+if ($env:GETNET_WEBHOOK_AUTH_MODE) {
+  Write-Output "ADVERTENCIA: GETNET_WEBHOOK_AUTH_MODE=$($env:GETNET_WEBHOOK_AUTH_MODE) (solo valido en local/UAT)."
+}
 
 Write-Output "Iniciando BuyMarket en http://localhost:$Port contra buymarket_webhook_test."
 Write-Output "La configuracion normal de base de datos queda reemplazada solo para este proceso."

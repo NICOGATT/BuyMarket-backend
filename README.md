@@ -937,80 +937,172 @@ Luego se puede agregar:
 
 ## Getnet Web Checkout Global
 
-La integración usa Web Checkout Global en modo `iframe`. Las credenciales se
-leen solamente desde variables de entorno y no son necesarias para iniciar el
-backend; los endpoints de Getnet responderán que la integración no está
-configurada hasta que se completen.
+Integración del checkout web de Getnet para el método `getnet`. Diseñada para
+homologación UAT con el webhook como **única fuente de verdad**: el redirect o
+iframe del frontend es solo UX y nunca aprueba una orden.
+
+### Arquitectura del flujo
+
+```text
+Frontend                    Backend                          Getnet
+   |  POST /payments/getnet/create-order/:orderId (JWT)         |
+   |--------------------------->|  lock de la orden (tx)        |
+   |                            |  reutiliza intento vigente    |
+   |                            |--- OAuth ------------------->|
+   |                            |--- payment-intent ---------->|
+   |<-- {paymentIntentId,       |  guarda PaymentAttempt        |
+   |     checkoutUrl}           |                               |
+   |  abre checkout_url (redirect) o iframe                      |
+   |----------------------------------------------------------->|
+   |                            |<-- POST /payments/getnet/webhook
+   |                            |  valida auth + payload        |
+   |                            |  tx: orden PAID + wallets +   |
+   |                            |  PaymentAttempt auditados     |
+   |<-- consulta estado orden --|--> notificaciones internas    |
+```
+
+Garantías:
+
+- Creación transaccional con `SELECT ... FOR UPDATE` sobre la orden: dos
+  llamadas concurrentes no generan dos intenciones externas; la segunda
+  reutiliza el intento pendiente vigente.
+- Un intento rechazado, cancelado o expirado permite generar uno nuevo; uno
+  pendiente vigente se reutiliza.
+- El webhook responde **HTTP 200 OK** siempre que procese o descarte de forma
+  segura (`401` solo si Basic Auth falla; errores `5xx` dejan que Getnet reintente).
+- Aprobación y rechazo son idempotentes en PostgreSQL: webhook duplicado no
+  duplica saldos ni notificaciones; un rechazo posterior nunca revierte una
+  orden pagada.
+- Orden, billeteras y auditoría corren dentro de una misma transacción; si
+  falla la acreditación de cualquier vendedor, todo vuelve atrás y Getnet
+  reintentará la entrega.
+
+### Endpoints internos
+
+| Método | Ruta | Auth | Descripción |
+|---|---|---|---|
+| POST | `/payments/getnet/create-order/:orderId` | JWT comprador | Crea/reutiliza la intención y devuelve datos de checkout |
+| POST | `/payments/getnet/webhook` | Basic Auth (configurable) | Notificaciones de Getnet. Responde `200` |
+
+El backend calcula siempre el importe desde la orden; el frontend no envía
+montos. La respuesta de creación:
+
+```json
+{
+  "orderId": "uuid-de-la-orden",
+  "paymentIntentId": "id-de-getnet",
+  "checkoutUrl": "https://...",
+  "checkoutType": "redirect",
+  "loaderUrl": "https://www.pre.globalgetnet.com/digital-checkout/loader.js"
+}
+```
+
+Campos según modalidad:
+
+- `GETNET_CHECKOUT_TYPE=redirect` (default): incluye `checkoutUrl` cuando
+  Getnet la devuelve.
+- `GETNET_CHECKOUT_TYPE=iframe`: incluye `loaderUrl` y el frontend ejecuta
+  `loader.init({ paymentIntentId })`.
+- Si Getnet no devuelve `checkout_url`, la respuesta degrada a iframe para no
+  bloquear la UX.
+
+**Cambios de contrato respecto de la versión anterior** (compatibilidad hacia
+atrás documentada): el webhook ahora responde `200` con `{"received":true}` en
+vez de `204`; `order.paymentStatus` guarda valores normalizados en mayúsculas
+(`PENDING`, `APPROVED`, `REJECTED`) en vez de `Pending/Authorized/Denied`; el
+default de modalidad es `redirect` (antes solo iframe).
 
 ### Variables de entorno
 
 ```env
-# Homologación
+# Homologación (UAT). Producción usa hosts DISTINTOS entregados por Getnet.
 GETNET_API_URL=https://api.pre.globalgetnet.com
 GETNET_WEB_URL=https://www.pre.globalgetnet.com
 
-# Entregadas por Getnet
+# Entregadas por Getnet. Las credenciales UAT y de producción son DIFERENTES.
 GETNET_CLIENT_ID=
 GETNET_CLIENT_SECRET=
 
-# Elegidas por BuyMarket y configuradas también en el Merchant Portal
+# Ruta del endpoint por si Getnet publica otra versión
+GETNET_PAYMENT_INTENT_PATH=/digital-checkout/v1/payment-intent
+
+# Modalidad de checkout: redirect (default) | iframe
+GETNET_CHECKOUT_TYPE=redirect
+
+# Autenticación del webhook: basic (default seguro) | none
+# `none` SOLO para UAT/local si Getnet confirma que no soporta autenticación.
+# En producción `none` está bloqueado: el webhook responde error.
+GETNET_WEBHOOK_AUTH_MODE=basic
 GETNET_WEBHOOK_USERNAME=
 GETNET_WEBHOOK_PASSWORD=
 
-# Navegación del iframe y vencimiento del payment intent
-GETNET_SUCCESS_URL=https://app.example.com/payments/getnet/success
-GETNET_ERROR_URL=https://app.example.com/payments/getnet/error
+# Unidad del campo amount: cents (default) | pesos
+# Centralizada en src/modules/payments/getnet-money.util.ts.
+# Confirmar con Getnet durante homologación (ver preguntas abiertas).
+GETNET_AMOUNT_UNIT=cents
+
+# URLs fijas del merchant: también se configuran en el portal de Getnet,
+# no se envían dinámicamente por operación.
+GETNET_SUCCESS_URL=
+GETNET_ERROR_URL=
+
+# Vencimiento del intento local (formato Getnet): 1h, 30m...
 GETNET_EXPIRES_AT=1h
+
+BACKEND_URL=https://api.example.com
 ```
 
-El host preproductivo habilitado puede depender de la cuenta de homologación;
-debe confirmarse con las credenciales entregadas antes de cambiar
-`GETNET_API_URL`. En producción deben usarse los hosts productivos habilitados
-por Getnet. El callback que debe registrarse en Technical Configuration es:
+### Configuración del portal Getnet
 
-```text
-{BACKEND_URL}/payments/getnet/webhook
+En Technical Configuration / Merchant Portal registrar:
+
+1. **Callback URL (webhook):** `{BACKEND_URL}/payments/getnet/webhook`
+   publicado por HTTPS con certificado válido. Si se usan las credenciales
+   Basic Auth, configurar allí el usuario y contraseña que deben coincidir con
+   `GETNET_WEBHOOK_USERNAME` / `GETNET_WEBHOOK_PASSWORD`. Debe estar publicado
+   por HTTPS con certificado válido. Las credenciales son secretos propios del
+   callback.
+2. **Success URL / Error URL:** páginas del frontend; fijas, se configuran una
+   vez en el portal.
+3. Si Getnet ofrece firma HMAC o secret de webhook, migrar a esa verificación
+   oficial (hoy no fue provista; ver preguntas abiertas).
+
+### Webhook como fuente de verdad
+
+Payload simplificado confirmado:
+
+```json
+{
+  "order_id": "12345",
+  "payment_intent_id": "abc123",
+  "status": "APPROVED"
+}
 ```
 
-El callback utiliza HTTP Basic Auth con `GETNET_WEBHOOK_USERNAME` y
-`GETNET_WEBHOOK_PASSWORD`. Debe estar publicado por HTTPS con un certificado
-válido. Las credenciales del webhook son secretos propios del callback y deben
-coincidir exactamente con las configuradas en Getnet.
+Normalización centralizada (`normalizeGetnetStatus`):
 
-El endpoint responde `204 No Content` cuando procesa o descarta de forma segura
-una notificación. Responde `401` si Basic Auth es inválida y deja pasar errores
-`5xx` cuando falla el procesamiento interno, para que Getnet reintente la
-entrega. No se deben registrar el header `Authorization`, secretos ni el payload
-completo.
+| Estado crudo | Interpretación |
+|---|---|
+| `APPROVED`, `AUTHORIZED` | aprobado → orden `paid`, acredita billeteras |
+| `REJECTED`, `DENIED` | rechazado → orden `rejected` (si no estaba pagada) |
+| otros / ausente | evento ignorado y logueado, sin romper |
 
-El backend valida `order_id`, `payment_intent_id`, monto en centavos y moneda
-`ARS`. Los estados `Authorized`/`AUTHORIZED` confirman la orden y los estados
-`Denied`/`DENIED` la rechazan. La actualización de la orden y la acreditación de
-las billeteras se realizan dentro de una única transacción con bloqueo de la
-orden. Por eso, una entrega repetida o concurrente no genera créditos dobles y
-una orden pagada no vuelve al estado rechazado.
+Validaciones obligatorias (sin ellas el evento se ignora): `order_id`,
+`payment_intent_id`, estado reconocible e intención coincidente con la orden.
 
-Para comprobar solamente conectividad y autenticación en homologación puede
-enviarse un payload incompleto; una credencial válida debe obtener `204` sin
-cuerpo y una inválida debe obtener `401`:
+Validaciones condicionales (solo cuando Getnet envía el dato, para no bloquear
+la homologación con payloads simplificados): moneda distinta de `ARS`,
+importe inconsistente con la orden (según `GETNET_AMOUNT_UNIT`), `payment_id`
+se registra cuando viene pero su ausencia no bloquea.
 
-```bash
-curl -i -u "$GETNET_WEBHOOK_USERNAME:$GETNET_WEBHOOK_PASSWORD" \
-  -H "Content-Type: application/json" \
-  -d '{}' \
-  "$BACKEND_URL/payments/getnet/webhook"
-```
-
-La homologación funcional debe incluir un pago autorizado, uno denegado y el
-reenvío del mismo evento. La orden y las billeteras se verifican en la base de
-datos; la pantalla de retorno del iframe no es una confirmación de pago. Véanse
-también los [requisitos oficiales de webhooks de Getnet](https://docs.globalgetnet.com/en/products/online-payments/regional-api?doc=webhook-how-it-works).
+Auditoría: cada evento actualiza el `PaymentAttempt` correspondiente
+(`rawStatus`, `providerPaymentId`, `lastNotifiedAt`, metadata sanitizada sin
+datos sensibles). Los índices únicos sobre `externalPaymentId` y
+`providerPaymentId` respaldan la idempotencia a nivel PostgreSQL.
 
 ### Pruebas locales del webhook
 
-La prueba manual usa la misma PostgreSQL descartable de la integración. Primero
-se levanta la base y, en una terminal separada, se inicia el backend con
-variables de proceso que reemplazan la conexión normal sin modificar `.env`:
+La prueba manual usa la misma PostgreSQL descartable de la integración:
 
 ```powershell
 npm run test:db:up
@@ -1019,7 +1111,7 @@ $env:GETNET_WEBHOOK_PASSWORD = "clave_local"
 npm run start:getnet:local
 ```
 
-En otra terminal se pasan las mismas credenciales para comprobar el endpoint:
+En otra terminal, con las mismas credenciales:
 
 ```powershell
 $env:GETNET_WEBHOOK_USERNAME = "usuario_local"
@@ -1027,22 +1119,12 @@ $env:GETNET_WEBHOOK_PASSWORD = "clave_local"
 npm run test:getnet:smoke
 ```
 
-También puede ejecutarse directamente:
-
-```powershell
-.\scripts\test-getnet-webhook-smoke.ps1 `
-  -Username "usuario_local" `
-  -Password "clave_local"
-```
-
-El script exige `204` con credenciales válidas y `401` con una contraseña
-incorrecta. Al terminar se detiene el backend y se ejecuta
+El script espera `200` con credenciales válidas y `401` inválidas (o `200` sin
+credenciales si `GETNET_WEBHOOK_AUTH_MODE=none`). Al terminar:
 `npm run test:db:down`.
 
-La prueba de integración usa solamente la PostgreSQL definida en
-`docker-compose.test.yml`. Escucha en `127.0.0.1:55432`, usa la base
-`buymarket_webhook_test` y rechaza ejecutar `dropSchema` si el nombre no termina
-en `_test` o si el host no es `localhost`/loopback:
+Suite de integración contra PostgreSQL (aprobación, concurrencia, rollback,
+reenvío idempotente, monotonicidad, payload simplificado, moneda inconsistente):
 
 ```powershell
 npm run test:db:up
@@ -1050,51 +1132,91 @@ npm run test:getnet:integration
 npm run test:db:down
 ```
 
-`test:db:down` elimina exclusivamente el proyecto Compose
-`buymarket-webhook-test` y su volumen descartable. La suite siembra dos
-vendedores con comisiones diferentes y comprueba aprobación, concurrencia,
-rollback, reintento, monotonicidad, notificaciones únicas y eventos
-inconsistentes.
-
-Para recibir una notificación real desde Getnet Homologación, instalar
-[`cloudflared`](https://developers.cloudflare.com/tunnel/downloads/), iniciar el
-backend y ejecutar:
+Para recibir notificaciones reales desde homologación, publicar el backend con
+[`cloudflared`](https://developers.cloudflare.com/tunnel/downloads/):
 
 ```powershell
 npm run getnet:tunnel
 ```
 
-El comando muestra una URL aleatoria `trycloudflare.com`. En Getnet se registra
-esa URL con `/payments/getnet/webhook` y las mismas credenciales Basic Auth. Los
-[Quick Tunnels](https://developers.cloudflare.com/tunnel/setup/#quick-tunnels-development)
-son únicamente para desarrollo y cambian al reiniciar; una homologación
-recurrente debe usar un túnel nombrado con hostname estable.
+Registrar la URL `https://....trycloudflare.com/payments/getnet/webhook` en
+Getnet. Los Quick Tunnels cambian al reiniciar; para homologación recurrente
+usar un túnel nombrado con hostname estable.
 
-### Contrato del checkout
+### Pasos exactos para UAT con Getnet
 
-Una orden debe crearse con `paymentMethod: "getnet"`. Luego el frontend llama,
-con JWT, a:
+1. Completar `.env` con credenciales UAT (`GETNET_API_URL`,
+   `GETNET_CLIENT_ID`, `GETNET_CLIENT_SECRET`, webhook basic) y levantar el
+   backend con túnel público HTTPS.
+2. Registrar el webhook y success/error URLs en el portal de homologación.
+3. Crear una orden real con `paymentMethod: "getnet"` desde la app.
+4. Ejecutar el smoke de intención (lee credenciales del entorno, jamás las
+   incrusta):
 
-```http
-POST /payments/getnet/create-order/:orderId
+```powershell
+$env:GETNET_CLIENT_ID = "<client-id-UAT>"
+$env:GETNET_CLIENT_SECRET = "<client-secret-UAT>"
+npm run test:getnet:uat-intent -- -OrderId "<uuid-de-orden>" -AmountPesos 15000
 ```
 
-La respuesta tiene esta forma:
+5. Abrir el `checkout_url` impuesto y pagar con una tarjeta de prueba UAT
+   (usar exclusivamente las tarjetas de prueba publicadas en el manual de
+   homologación de Getnet; no se replican aquí para no inventar valores).
+6. Verificar en la base: orden `paid`, transacciones de wallet por vendedor
+   netas de comisión, 5 notificaciones únicas.
+7. Reenviar el mismo webhook para probar idempotencia:
 
-```json
-{
-  "orderId": "uuid-de-la-orden",
-  "paymentIntentId": "uuid-del-payment-intent",
-  "checkoutType": "iframe",
-  "loaderUrl": "https://www.pre.globalgetnet.com/digital-checkout/loader.js"
-}
+```powershell
+npm run getnet:webhook:replay -- -PayloadFile .\webhook-aprobado.json
 ```
 
-El frontend carga `loaderUrl`, ejecuta
-`loader.init({ paymentIntentId, checkoutType: "iframe" })` e inserta el iframe
-generado en el contenedor de pago. La interfaz del iframe no confirma por sí
-sola la compra: la fuente de verdad es el estado de la orden actualizado por el
-webhook (`paid` para `Authorized` y `rejected` para `Denied`).
+**Una prueba se considera aprobada cuando:** OAuth responde token; la creación
+devuelve `payment_intent_id` (+ `checkout_url`); el webhook llega con `200`;
+la orden pasa a `paid` (o `rejected` con tarjeta denegada); cada vendedor
+recibe exactamente su neto una sola vez; el reenvío del mismo evento no cambia
+saldo ni notificaciones; los eventos ignorados quedaron logueados con motivo.
+
+### De UAT a producción
+
+1. Solicitar/activar credenciales **productivas**: `CLIENT_ID`/`CLIENT_SECRET`
+   de producción son distintos de UAT.
+2. Cambiar `GETNET_API_URL` y `GETNET_WEB_URL` a los hosts productivos
+   habilitados por Getnet (no son los `.pre.` de UAT).
+3. Reconfigurar en el portal productivo: webhook URL, success/error URLs y
+   credenciales Basic del callback.
+4. Definir `DB_SYNCHRONIZE=false` y ejecutar migraciones antes de desplegar.
+5. Repetir la homologación completa en producción con montos reales de prueba
+   y verificación en base.
+
+### Migraciones
+
+El proyecto usa `synchronize` controlado por `DB_SYNCHRONIZE` (default `true`
+en desarrollo). Para producción ponerlo en `false` y aplicar migraciones no
+destructivas:
+
+```bash
+npm run migration:show     # listar migraciones y estado
+npm run migration:run      # aplicar pendientes
+npm run migration:revert   # revertir la última
+```
+
+Migraciones incluidas: `1724505600000-AddGetnetWebCheckoutAttemptFields`
+(agrega columnas de auditoría e índices únicos en `payment_attempts`; no borra
+ni modifica datos existentes).
+
+### Preguntas abiertas para Getnet
+
+1. ¿El campo `amount` se expresa en centavos o en pesos? (hoy configurable vía
+   `GETNET_AMOUNT_UNIT`, default `cents`).
+2. ¿El webhook soporta autenticación (Basic Auth, firma HMAC o secret)? El
+   manual nuevo no lo confirma; mientras tanto `basic` es default y `none`
+   existe solo para UAT.
+3. ¿El endpoint `/digital-checkout/v1/payment-intent` acepta campos extra
+   (detalle de productos, `3ds`, `expires_at`) además del body simplificado?
+4. ¿Qué estados intermedios puede reportar el webhook además de
+   APPROVED/AUTHORIZED y REJECTED/DENIED (por ejemplo expiración)?
+5. Tarjetas de prueba oficiales de UAT: usar las del manual de homologación
+   vigente provisto por Getnet.
 
 ## Getnet QR interoperable
 

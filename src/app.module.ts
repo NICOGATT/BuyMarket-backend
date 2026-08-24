@@ -49,7 +49,8 @@ import { ColorsModule } from './modules/colors/colors.module';
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_DATABASE'),
         autoLoadEntities: true,
-        synchronize: true,
+        // En produccion debe configurarse DB_SYNCHRONIZE=false y usar migraciones.
+        synchronize: config.get<string>('DB_SYNCHRONIZE') !== 'false',
         ssl:
           config.get<string>('NODE_ENV') === 'production'
             ? { rejectUnauthorized: false }

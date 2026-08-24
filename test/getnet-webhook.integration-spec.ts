@@ -18,7 +18,10 @@ import {
   OrderStatus,
   PaymentMethod,
 } from '../src/modules/orders/entities/order.enums';
-import { PaymentAttempt } from '../src/modules/payments/entity/payment-attempt.entity';
+import {
+  PaymentAttempt,
+  PaymentAttemptStatus,
+} from '../src/modules/payments/entity/payment-attempt.entity';
 import { Payment } from '../src/modules/payments/entity/payment.entity';
 import { GetnetClient } from '../src/modules/payments/getnet.client';
 import { PaymentsService } from '../src/modules/payments/payments.service';
@@ -93,6 +96,7 @@ describe('Getnet webhook con PostgreSQL', () => {
   let walletRepository: Repository<Wallet>;
   let transactionRepository: Repository<WalletTransaction>;
   let notificationRepository: Repository<Notification>;
+  let attemptRepository: Repository<PaymentAttempt>;
 
   beforeAll(async () => {
     if (!database.endsWith('_test')) {
@@ -124,6 +128,7 @@ describe('Getnet webhook con PostgreSQL', () => {
     walletRepository = dataSource.getRepository(Wallet);
     transactionRepository = dataSource.getRepository(WalletTransaction);
     notificationRepository = dataSource.getRepository(Notification);
+    attemptRepository = dataSource.getRepository(PaymentAttempt);
 
     const notificationsService = new NotificationsService(
       notificationRepository,
@@ -174,6 +179,25 @@ describe('Getnet webhook con PostgreSQL', () => {
       authorization,
       authorizedPayload(fixture.order),
     );
+
+    await expectApproved(fixture);
+    const attempt = await attemptRepository.findOneOrFail({
+      where: { externalPaymentId: fixture.order.paymentPreferenceId },
+    });
+    expect(attempt.status).toBe(PaymentAttemptStatus.APPROVED);
+    expect(attempt.rawStatus).toBe('AUTHORIZED');
+    expect(attempt.providerPaymentId).toBe(`payment-${fixture.order.id}`);
+    expect(attempt.lastNotifiedAt).toBeInstanceOf(Date);
+  });
+
+  it('aprueba con el payload simplificado sin importe ni moneda', async () => {
+    const fixture = await seedFixture();
+
+    await paymentsService.handleGetnetWebhook(authorization, {
+      order_id: fixture.order.id,
+      payment_intent_id: fixture.order.paymentPreferenceId,
+      status: 'APPROVED',
+    });
 
     await expectApproved(fixture);
   });
@@ -238,9 +262,41 @@ describe('Getnet webhook con PostgreSQL', () => {
 
     const order = await reloadOrder(fixture.order.id);
     expect(order.status).toBe(OrderStatus.PAID);
-    expect(order.paymentStatus).toBe('Authorized');
+    expect(order.paymentStatus).toBe('APPROVED');
     expect(await transactionRepository.count()).toBe(2);
     expect(await notificationRepository.count()).toBe(5);
+  });
+
+  it('el reenvio del mismo webhook aprobado no duplica saldos ni notificaciones', async () => {
+    const fixture = await seedFixture();
+    const payload = authorizedPayload(fixture.order);
+
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+
+    const order = await reloadOrder(fixture.order.id);
+    expect(order.status).toBe(OrderStatus.PAID);
+    expect(await transactionRepository.count()).toBe(2);
+    expect(await notificationRepository.count()).toBe(5);
+  });
+
+  it('ignora monedas distintas de ARS cuando el payload la incluye', async () => {
+    const fixture = await seedFixture();
+    const payload = authorizedPayload(fixture.order);
+    (payload.payment as { currency: string }).currency = 'USD';
+
+    await paymentsService.handleGetnetWebhook(authorization, payload);
+
+    expect((await reloadOrder(fixture.order.id)).status).toBe(
+      OrderStatus.PENDING,
+    );
+    expect(await transactionRepository.count()).toBe(0);
+    // La evidencia del evento ignorado queda auditada.
+    const attempt = await attemptRepository.findOneOrFail({
+      where: { externalPaymentId: fixture.order.paymentPreferenceId },
+    });
+    expect(attempt.status).toBe(PaymentAttemptStatus.PENDING);
+    expect(attempt.lastNotifiedAt).toBeInstanceOf(Date);
   });
 
   it('ignora ordenes desconocidas e intents inconsistentes sin mutar datos', async () => {
@@ -406,7 +462,7 @@ describe('Getnet webhook con PostgreSQL', () => {
   async function expectApproved(fixture: Fixture) {
     const order = await reloadOrder(fixture.order.id);
     expect(order.status).toBe(OrderStatus.PAID);
-    expect(order.paymentStatus).toBe('Authorized');
+    expect(order.paymentStatus).toBe('APPROVED');
     expect(
       await transactionRepository.count({
         where: {
