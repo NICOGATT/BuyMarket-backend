@@ -37,8 +37,10 @@ export class PaymentAttempt {
 
   /**
    * Identificador definitivo del pago cuando Getnet lo informa (webhook).
+   * El nombre del indice queda fijado para coincidir con la migracion
+   * AddGetnetWebCheckoutAttemptFields y evitar drift con synchronize.
    */
-  @Index({ unique: true })
+  @Index('IDX_payment_attempts_provider_payment_id', { unique: true })
   @Column({ nullable: true })
   providerPaymentId?: string;
 
