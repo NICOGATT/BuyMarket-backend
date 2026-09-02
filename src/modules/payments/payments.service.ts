@@ -705,14 +705,24 @@ export class PaymentsService {
       const result = await this.getnetClient.createPaymentIntent({
         order_id: order.id,
         customer: {
+          customer_id: order.buyer.id,
           first_name: order.buyer.firstName.slice(0, 40),
           last_name: order.buyer.lastName.slice(0, 80),
+          name: `${order.buyer.firstName} ${order.buyer.lastName}`
+            .trim()
+            .slice(0, 120),
           email: order.buyer.email,
         },
         payment: {
           currency: 'ARS',
           amount: toGetnetAmount(this.configService, order.total),
         },
+        product: order.items.map((item) => ({
+          product_type: 'cash_carry',
+          title: item.product.title.slice(0, 120),
+          value: toGetnetAmount(this.configService, item.subtotal),
+          quantity: item.quantity,
+        })),
       });
 
       attempt.externalPaymentId = result.payment_intent_id;

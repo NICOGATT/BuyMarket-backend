@@ -18,14 +18,22 @@ export const DEFAULT_GETNET_PAYMENT_INTENT_PATH =
 export interface GetnetPaymentIntentRequest {
   order_id: string;
   customer: {
+    customer_id: string;
     first_name: string;
     last_name: string;
+    name: string;
     email?: string;
   };
   payment: {
     currency: 'ARS';
     amount: number;
   };
+  product: Array<{
+    product_type: string;
+    title: string;
+    value: number;
+    quantity: number;
+  }>;
 }
 
 export interface GetnetPaymentIntentResponse {

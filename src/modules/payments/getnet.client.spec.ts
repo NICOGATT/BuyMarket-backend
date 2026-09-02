@@ -10,11 +10,14 @@ describe('GetnetClient', () => {
   const payload: GetnetPaymentIntentRequest = {
     order_id: 'order-1',
     customer: {
+      customer_id: 'customer-1',
       first_name: 'Nico',
       last_name: 'Gatti',
+      name: 'Nico Gatti',
       email: 'buyer@test.com',
     },
     payment: { currency: 'ARS', amount: 150000 },
+    product: {} as GetnetPaymentIntentRequest['product'],
   };
 
   const response = (status: number, body: unknown) =>
