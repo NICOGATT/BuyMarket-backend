@@ -198,9 +198,6 @@ export class GetnetClient {
     const value = this.configService.get<string>(key)?.trim();
 
     if (!value) {
-      this.logger.error(
-        `Getnet config missing: key=${key} processEnvPresent=${key in process.env} processEnvLength=${process.env[key]?.length ?? 0} configServiceRawLength=${this.configService.get<string>(key)?.length ?? 0}`,
-      );
       throw new ServiceUnavailableException(
         'La integracion con Getnet todavia no esta configurada',
       );
