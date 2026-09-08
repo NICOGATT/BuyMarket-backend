@@ -10,14 +10,19 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - backend
-  backend: 
-    build: . 
+  backend:
+    build: .
     container_name: buymarket_backend
     restart: always
-    ports : 
+    ports :
       - "3000:3000"
     env_file:
       - .env
+    environment:
+      # .env trae DB_HOST=localhost para correr el backend nativo (npm run start:dev)
+      # contra el Postgres publicado en el host. Dentro de la red de Compose el
+      # contenedor debe resolver el servicio por su nombre.
+      - DB_HOST=postgres
     depends_on:
       - postgres
   postgres:
