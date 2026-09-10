@@ -25,4 +25,25 @@ export class MailService {
     console.log('MAIL ENVIADO:', data);
     return data;
   }
+
+  async sendPasswordResetEmail(email: string, resetLink: string) {
+    const {data, error} = await this.resend.emails.send({
+      from: process.env.MAIL_FROM!,
+      to: email,
+      subject: 'Recuperá tu contraseña - BuyMarket',
+      html: `
+        <h2>Recuperá tu contraseña</h2>
+        <p>Hacé click en el siguiente enlace para elegir una nueva contraseña:</p>
+        <p><a href="${resetLink}">${resetLink}</a></p>
+        <p>Este enlace vence en 1 hora. Si no solicitaste este cambio, podés ignorar este email.</p>
+      `,
+    });
+    if (error) {
+      console.error('ERROR RESEND: ', JSON.stringify(error, null, 2));
+      throw new Error(error.message || 'No se pudo enviar el email');
+    }
+
+    console.log('MAIL ENVIADO:', data);
+    return data;
+  }
 }

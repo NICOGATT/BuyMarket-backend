@@ -76,6 +76,12 @@ export class User {
   emailVerifcationExpires?: Date;
 
   @Column({ nullable: true })
+  resetPasswordToken?: string;
+
+  @Column({ type: 'timestamp', nullable: true })
+  resetPasswordExpires?: Date;
+
+  @Column({ nullable: true })
   googleId?: string;
 
   @Column({ default: 'local' })

@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 import { JwtService } from '@nestjs/jwt';
 
@@ -19,6 +20,8 @@ import { LoginDto } from './dto/login.dto';
 import { Plan } from '../plan/entities/plan.entity';
 import { Wallet } from '../wallet/entity/wallet.entity';
 import { VerifyEmailDto } from './dto/verify-emai.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { MailService } from '../mail/mail.service';
 import { OAuth2Client } from 'google-auth-library';
 @Injectable()
@@ -40,6 +43,12 @@ export class AuthService {
 
   private generateVerificationCode(): string {
     return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  // sha256 en vez de bcrypt: necesitamos buscar al usuario por el token
+  // (todavia no autenticado), y bcrypt no es determinístico para un WHERE.
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
   }
 
   private buildAuthPayload(user: User) {
@@ -208,6 +217,55 @@ export class AuthService {
     }
 
   } 
+
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const user = await this.usersRepository.findOne({
+      where: { email: dto.email },
+    });
+
+    if (user && user.provider === 'local') {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+
+      user.resetPasswordToken = this.hashToken(rawToken);
+      user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000);
+
+      await this.usersRepository.save(user);
+
+      const resetLink = `${process.env.FRONTEND_RESET_PASSWORD_URL}?token=${rawToken}`;
+      await this.mailService.sendPasswordResetEmail(user.email, resetLink);
+    }
+
+    return {
+      message:
+        'Si el email existe, se envió un enlace para restablecer la contraseña',
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const hashedToken = this.hashToken(dto.token);
+
+    const user = await this.usersRepository.findOne({
+      where: { resetPasswordToken: hashedToken },
+    });
+
+    if (
+      !user ||
+      !user.resetPasswordExpires ||
+      user.resetPasswordExpires < new Date()
+    ) {
+      throw new BadRequestException('El enlace es inválido o expiró');
+    }
+
+    user.password = await bcrypt.hash(dto.newPassword, 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+
+    await this.usersRepository.save(user);
+
+    return {
+      message: 'Contraseña actualizada correctamente',
+    };
+  }
 
   async getCurrentUser(userId: string) {
     const user = await this.usersRepository.findOne({
