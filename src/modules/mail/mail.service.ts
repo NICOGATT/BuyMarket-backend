@@ -34,11 +34,11 @@ export class MailService {
       html: `
         <h2>Recuperá tu contraseña</h2>
         <p>Hacé click en el siguiente botón para elegir una nueva contraseña:</p>
-        <p>
+        <button style="background-color:blue">
           <a href="${resetLink}" style="display:inline-block;padding:12px 24px;background-color:#111827;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold;">
             Restablecer contraseña
           </a>
-        </p>
+        </button>
         <p>Si el botón no funciona, copiá y pegá este enlace en tu navegador:</p>
         <p><a href="${resetLink}">${resetLink}</a></p>
         <p>Este enlace vence en 1 hora. Si no solicitaste este cambio, podés ignorar este email.</p>
