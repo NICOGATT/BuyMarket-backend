@@ -27,6 +27,7 @@ import { NotifyTransferPaymentDto } from './dto/notify-transfer-payment.dto';
 import { UpdateTransferPaymentStatusDto } from './dto/update-transfer-payment-status.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GetnetQrService } from './getnet-qr.service';
+import { PaywayService } from './payway.service';
 
 const transferProofMaxSize = 5 * 1024 * 1024;
 const transferProofMaxSizeMessage = 'El comprobante no puede superar los 5 MB.';
@@ -58,11 +59,30 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly getnetQrService: GetnetQrService,
+    private readonly paywayService: PaywayService,
   ) {}
 
   @Get('capabilities')
   getCapabilities() {
-    return this.getnetQrService.getCapabilities();
+    return {
+      ...this.getnetQrService.getCapabilities(),
+      ...this.paywayService.getCapabilities(),
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('payway/create-link/:orderId')
+  createPaywayLink(@Param('orderId') orderId: string, @Req() req: any) {
+    return this.paywayService.createPaymentLink(orderId, req.user.id);
+  }
+
+  @Post('payway/webhook')
+  @HttpCode(HttpStatus.OK)
+  handlePaywayWebhook(
+    @Query('attempt') attempt: string | undefined,
+    @Body() body: unknown,
+  ) {
+    return this.paywayService.handleNotification(attempt, body);
   }
 
   @UseGuards(JwtAuthGuard)
