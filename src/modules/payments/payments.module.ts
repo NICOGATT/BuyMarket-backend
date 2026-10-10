@@ -11,6 +11,8 @@ import { GetnetClient } from './getnet.client';
 import { GetnetQrClient } from './getnet-qr.client';
 import { GetnetQrService } from './getnet-qr.service';
 import { PaymentAttempt } from './entity/payment-attempt.entity';
+import { PaywayClient } from './payway.client';
+import { PaywayService } from './payway.service';
 
 @Module({
   imports: [
@@ -20,6 +22,13 @@ import { PaymentAttempt } from './entity/payment-attempt.entity';
     NotificationsModule,
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService, GetnetClient, GetnetQrClient, GetnetQrService],
+  providers: [
+    PaymentsService,
+    GetnetClient,
+    GetnetQrClient,
+    GetnetQrService,
+    PaywayClient,
+    PaywayService,
+  ],
 })
 export class PaymentsModule {}
