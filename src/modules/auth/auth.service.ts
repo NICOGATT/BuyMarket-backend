@@ -63,18 +63,54 @@ export class AuthService {
     };
   }
 
+  /**
+   * Devuelve el plan Free activo. Fuera de produccion, si todavia no existe, lo
+   * crea (insert idempotente por el unique de `name`) para que una base nueva,
+   * como la de staging, permita registrarse sin cargar datos a mano.
+   * En produccion nunca se crea solo: una comision por defecto equivocada seria
+   * un error silencioso, asi que ahi se mantiene el error "plan no configurado".
+   */
+  private async findOrCreateFreePlan() {
+    const where = { name: 'Free', isActive: true };
+    const existing = await this.plansRepository.findOne({ where });
+
+    if (
+      existing ||
+      process.env.NODE_ENV?.trim().toLowerCase() === 'production'
+    ) {
+      return existing;
+    }
+
+    await this.plansRepository
+      .createQueryBuilder()
+      .insert()
+      .into(Plan)
+      .values({
+        name: 'Free',
+        commissionPercentage: this.defaultFreePlanCommission(),
+        isActive: true,
+      })
+      .orIgnore()
+      .execute();
+
+    return this.plansRepository.findOne({ where });
+  }
+
+  private defaultFreePlanCommission() {
+    const configured = Number(process.env.FREE_PLAN_COMMISSION);
+
+    return Number.isFinite(configured) && configured >= 0 && configured <= 100
+      ? configured
+      : 0;
+  }
+
   async register(registerDto: RegisterDto) {
     const hashedPassword = await bcrypt.hash(
       registerDto.password,
       10,
     );
 
-    const freePlan = await this.plansRepository.findOne({
-      where: {
-        name: 'Free',
-        isActive: true,
-      },
-    });
+    const freePlan = await this.findOrCreateFreePlan();
 
     if (!freePlan) {
       throw new NotFoundException(
@@ -304,12 +340,7 @@ export class AuthService {
     }
 
     const email = payload.email;
-    const freePlan = await this.plansRepository.findOne({
-      where: {
-        name: 'Free',
-        isActive: true,
-      },
-    });
+    const freePlan = await this.findOrCreateFreePlan();
 
     let user = await this.usersRepository.findOne({
       where : {email} 
