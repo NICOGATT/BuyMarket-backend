@@ -10,7 +10,8 @@ const defaultCorsOrigins = [
   "https://hdphxs14-5173.brs.devtunnels.ms",
   "https://xwjbvbw0-5173.brs.devtunnels.ms", 
   "https://buymarket.com.ar", 
-  "https://www.buymarket.com.ar"
+  "https://www.buymarket.com.ar",
+  "https://buy-market-djckbqd0p-nicodev1.vercel.app"
 ];
 
 function getCorsOrigins() {
