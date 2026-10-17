@@ -76,6 +76,13 @@ export class PaymentsController {
     return this.paywayService.createPaymentLink(orderId, req.user.id);
   }
 
+  // Payway parece comprobar que notifications_url responda antes de aceptarla:
+  // un GET a esta ruta devuelve 200 sin efectos.
+  @Get(['payway/webhook', 'payway/webhook/:attemptId'])
+  paywayWebhookHealth() {
+    return { ok: true };
+  }
+
   @Post(['payway/webhook', 'payway/webhook/:attemptId'])
   @HttpCode(HttpStatus.OK)
   handlePaywayWebhook(

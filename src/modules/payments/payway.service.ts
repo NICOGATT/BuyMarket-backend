@@ -213,6 +213,8 @@ export class PaywayService {
     }
 
     const url = new URL(base);
+    // Una barra doble en la ruta (p. ej. //checkout/failure) la rechaza Payway.
+    url.pathname = url.pathname.replace(/\/{2,}/g, '/');
     url.searchParams.set('orderId', orderId);
     return url.toString();
   }
