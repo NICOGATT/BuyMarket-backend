@@ -102,7 +102,16 @@ export class PaywayClient {
     if (!response.ok) {
       const detail = await this.safeErrorDetail(response);
       this.logger.error(
-        `Payway payment link request failed with status ${response.status}${detail ? ` detail=${detail}` : ''}`,
+        `Payway payment link request failed with status ${response.status}${detail ? ` detail=${detail}` : ''} env=${this.getEnvironment()} sent=${JSON.stringify(
+          {
+            successUrl: input.successUrl,
+            cancelUrl: input.cancelUrl,
+            notificationsUrl: input.notificationsUrl,
+            totalPrice: input.totalPrice,
+            templateId: this.getTemplateId(),
+            installments: this.getInstallments(),
+          },
+        )}`,
       );
       throw new BadGatewayException('Payway no pudo crear el link de pago');
     }
