@@ -292,11 +292,12 @@ export class AuthService {
       throw new BadRequestException('El enlace es inválido o expiró');
     }
 
-    user.password = await bcrypt.hash(dto.newPassword, 10);
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-
-    await this.usersRepository.save(user);
+    // save() ignores undefined, so the token would survive; update() with NULL really clears it.
+    await this.usersRepository.update(user.id, {
+      password: await bcrypt.hash(dto.newPassword, 10),
+      resetPasswordToken: () => 'NULL',
+      resetPasswordExpires: () => 'NULL',
+    });
 
     return {
       message: 'Contraseña actualizada correctamente',
