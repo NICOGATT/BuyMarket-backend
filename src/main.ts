@@ -24,11 +24,20 @@ function getCorsOrigins() {
   );
 }
 
+// Vercel generates a new URL per preview deploy (buy-market-<hash>-nicodev1.vercel.app).
+const vercelPreviewOrigin = /^https:\/\/buy-market-[a-z0-9]+-nicodev1\.vercel\.app$/;
+
+function isAllowedOrigin(origin: string | undefined) {
+  // Requests without Origin (curl, server-to-server, webhooks) are not CORS requests.
+  if (!origin) return true;
+  return getCorsOrigins().includes(origin) || vercelPreviewOrigin.test(origin);
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: getCorsOrigins(),
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: [
       'Content-Type',
