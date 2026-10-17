@@ -226,8 +226,9 @@ export class PaywayService {
       );
     }
 
-    const url = new URL(`${base.replace(/\/$/, '')}/payments/payway/webhook`);
-    url.searchParams.set('attempt', attemptId);
-    return url.toString();
+    // El id va en la ruta: Payway rechaza notifications_url con query string.
+    return new URL(
+      `${base.replace(/\/$/, '')}/payments/payway/webhook/${encodeURIComponent(attemptId)}`,
+    ).toString();
   }
 }

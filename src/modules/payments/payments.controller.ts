@@ -76,13 +76,17 @@ export class PaymentsController {
     return this.paywayService.createPaymentLink(orderId, req.user.id);
   }
 
-  @Post('payway/webhook')
+  @Post(['payway/webhook', 'payway/webhook/:attemptId'])
   @HttpCode(HttpStatus.OK)
   handlePaywayWebhook(
-    @Query('attempt') attempt: string | undefined,
+    @Param('attemptId') attemptId: string | undefined,
+    @Query('attempt') legacyAttempt: string | undefined,
     @Body() body: unknown,
   ) {
-    return this.paywayService.handleNotification(attempt, body);
+    return this.paywayService.handleNotification(
+      attemptId ?? legacyAttempt,
+      body,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
