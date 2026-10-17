@@ -22,6 +22,7 @@ import { Wallet } from '../wallet/entity/wallet.entity';
 import { VerifyEmailDto } from './dto/verify-emai.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { isAllowedOrigin } from '../../common/allowed-origins';
 import { MailService } from '../mail/mail.service';
 import { OAuth2Client } from 'google-auth-library';
 @Injectable()
@@ -254,7 +255,16 @@ export class AuthService {
 
   } 
 
-  async forgotPassword(dto: ForgotPasswordDto) {
+  // Link to the frontend the request came from (local, preview, prod); falls back to the env URL.
+  private buildResetPasswordUrl(origin?: string): string {
+    const fallback = process.env.FRONTEND_RESET_PASSWORD_URL!;
+
+    if (!origin || !isAllowedOrigin(origin)) return fallback;
+
+    return `${origin}${new URL(fallback).pathname}`;
+  }
+
+  async forgotPassword(dto: ForgotPasswordDto, origin?: string) {
     const user = await this.usersRepository.findOne({
       where: { email: dto.email },
     });
@@ -267,7 +277,7 @@ export class AuthService {
 
       await this.usersRepository.save(user);
 
-      const resetLink = `${process.env.FRONTEND_RESET_PASSWORD_URL}?token=${rawToken}`;
+      const resetLink = `${this.buildResetPasswordUrl(origin)}?token=${rawToken}`;
       await this.mailService.sendPasswordResetEmail(user.email, resetLink);
     }
 
