@@ -4,6 +4,7 @@ import request from 'supertest';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { GetnetQrService } from './getnet-qr.service';
+import { PaywayService } from './payway.service';
 import { PaymentStatus } from './entity/payment.entity';
 
 describe('PaymentsController', () => {
@@ -36,6 +37,14 @@ describe('PaymentsController', () => {
             getCapabilities: jest.fn(),
             createPayment: jest.fn(),
             handleWebhook: jest.fn(),
+          },
+        },
+        {
+          provide: PaywayService,
+          useValue: {
+            getCapabilities: jest.fn(),
+            createPaymentLink: jest.fn(),
+            handleNotification: jest.fn(),
           },
         },
       ],

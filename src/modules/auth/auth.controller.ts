@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Post,
   Req,
   UseGuards,
@@ -53,8 +54,9 @@ export class AuthController {
   @Post('forgot-password')
   forgotPassword(
     @Body() dto: ForgotPasswordDto,
+    @Headers('origin') origin?: string,
   ) {
-    return this.authService.forgotPassword(dto);
+    return this.authService.forgotPassword(dto, origin);
   }
 
   @Post('reset-password')

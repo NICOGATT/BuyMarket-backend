@@ -27,6 +27,7 @@ import { NotifyTransferPaymentDto } from './dto/notify-transfer-payment.dto';
 import { UpdateTransferPaymentStatusDto } from './dto/update-transfer-payment-status.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GetnetQrService } from './getnet-qr.service';
+import { PaywayService } from './payway.service';
 
 const transferProofMaxSize = 5 * 1024 * 1024;
 const transferProofMaxSizeMessage = 'El comprobante no puede superar los 5 MB.';
@@ -58,11 +59,41 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly getnetQrService: GetnetQrService,
+    private readonly paywayService: PaywayService,
   ) {}
 
   @Get('capabilities')
   getCapabilities() {
-    return this.getnetQrService.getCapabilities();
+    return {
+      ...this.getnetQrService.getCapabilities(),
+      ...this.paywayService.getCapabilities(),
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('payway/create-link/:orderId')
+  createPaywayLink(@Param('orderId') orderId: string, @Req() req: any) {
+    return this.paywayService.createPaymentLink(orderId, req.user.id);
+  }
+
+  // Payway parece comprobar que notifications_url responda antes de aceptarla:
+  // un GET a esta ruta devuelve 200 sin efectos.
+  @Get(['payway/webhook', 'payway/webhook/:attemptId'])
+  paywayWebhookHealth() {
+    return { ok: true };
+  }
+
+  @Post(['payway/webhook', 'payway/webhook/:attemptId'])
+  @HttpCode(HttpStatus.OK)
+  handlePaywayWebhook(
+    @Param('attemptId') attemptId: string | undefined,
+    @Query('attempt') legacyAttempt: string | undefined,
+    @Body() body: unknown,
+  ) {
+    return this.paywayService.handleNotification(
+      attemptId ?? legacyAttempt,
+      body,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

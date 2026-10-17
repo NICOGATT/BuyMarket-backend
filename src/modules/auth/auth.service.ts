@@ -22,6 +22,7 @@ import { Wallet } from '../wallet/entity/wallet.entity';
 import { VerifyEmailDto } from './dto/verify-emai.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { isAllowedOrigin } from '../../common/allowed-origins';
 import { MailService } from '../mail/mail.service';
 import { OAuth2Client } from 'google-auth-library';
 @Injectable()
@@ -63,18 +64,54 @@ export class AuthService {
     };
   }
 
+  /**
+   * Devuelve el plan Free activo. Fuera de produccion, si todavia no existe, lo
+   * crea (insert idempotente por el unique de `name`) para que una base nueva,
+   * como la de staging, permita registrarse sin cargar datos a mano.
+   * En produccion nunca se crea solo: una comision por defecto equivocada seria
+   * un error silencioso, asi que ahi se mantiene el error "plan no configurado".
+   */
+  private async findOrCreateFreePlan() {
+    const where = { name: 'Free', isActive: true };
+    const existing = await this.plansRepository.findOne({ where });
+
+    if (
+      existing ||
+      process.env.NODE_ENV?.trim().toLowerCase() === 'production'
+    ) {
+      return existing;
+    }
+
+    await this.plansRepository
+      .createQueryBuilder()
+      .insert()
+      .into(Plan)
+      .values({
+        name: 'Free',
+        commissionPercentage: this.defaultFreePlanCommission(),
+        isActive: true,
+      })
+      .orIgnore()
+      .execute();
+
+    return this.plansRepository.findOne({ where });
+  }
+
+  private defaultFreePlanCommission() {
+    const configured = Number(process.env.FREE_PLAN_COMMISSION);
+
+    return Number.isFinite(configured) && configured >= 0 && configured <= 100
+      ? configured
+      : 0;
+  }
+
   async register(registerDto: RegisterDto) {
     const hashedPassword = await bcrypt.hash(
       registerDto.password,
       10,
     );
 
-    const freePlan = await this.plansRepository.findOne({
-      where: {
-        name: 'Free',
-        isActive: true,
-      },
-    });
+    const freePlan = await this.findOrCreateFreePlan();
 
     if (!freePlan) {
       throw new NotFoundException(
@@ -218,7 +255,16 @@ export class AuthService {
 
   } 
 
-  async forgotPassword(dto: ForgotPasswordDto) {
+  // Link to the frontend the request came from (local, preview, prod); falls back to the env URL.
+  private buildResetPasswordUrl(origin?: string): string {
+    const fallback = process.env.FRONTEND_RESET_PASSWORD_URL!;
+
+    if (!origin || !isAllowedOrigin(origin)) return fallback;
+
+    return `${origin}${new URL(fallback).pathname}`;
+  }
+
+  async forgotPassword(dto: ForgotPasswordDto, origin?: string) {
     const user = await this.usersRepository.findOne({
       where: { email: dto.email },
     });
@@ -231,7 +277,7 @@ export class AuthService {
 
       await this.usersRepository.save(user);
 
-      const resetLink = `${process.env.FRONTEND_RESET_PASSWORD_URL}?token=${rawToken}`;
+      const resetLink = `${this.buildResetPasswordUrl(origin)}?token=${rawToken}`;
       await this.mailService.sendPasswordResetEmail(user.email, resetLink);
     }
 
@@ -256,11 +302,12 @@ export class AuthService {
       throw new BadRequestException('El enlace es inválido o expiró');
     }
 
-    user.password = await bcrypt.hash(dto.newPassword, 10);
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-
-    await this.usersRepository.save(user);
+    // save() ignores undefined, so the token would survive; update() with NULL really clears it.
+    await this.usersRepository.update(user.id, {
+      password: await bcrypt.hash(dto.newPassword, 10),
+      resetPasswordToken: () => 'NULL',
+      resetPasswordExpires: () => 'NULL',
+    });
 
     return {
       message: 'Contraseña actualizada correctamente',
@@ -304,12 +351,7 @@ export class AuthService {
     }
 
     const email = payload.email;
-    const freePlan = await this.plansRepository.findOne({
-      where: {
-        name: 'Free',
-        isActive: true,
-      },
-    });
+    const freePlan = await this.findOrCreateFreePlan();
 
     let user = await this.usersRepository.findOne({
       where : {email} 

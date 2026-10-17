@@ -4,30 +4,13 @@ import { ValidationPipe } from '@nestjs/common';
 import { ClassSerializerInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
-const defaultCorsOrigins = [
-  'http://localhost:5173',
-  "https://buy-market-web.vercel.app", 
-  "https://hdphxs14-5173.brs.devtunnels.ms",
-  "https://xwjbvbw0-5173.brs.devtunnels.ms", 
-  "https://buymarket.com.ar", 
-  "https://www.buymarket.com.ar"
-];
-
-function getCorsOrigins() {
-  const configuredOrigins = process.env.CORS_ORIGINS?.split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-  return Array.from(
-    new Set([...defaultCorsOrigins, ...(configuredOrigins ?? [])]),
-  );
-}
+import { isAllowedOrigin } from './common/allowed-origins';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: getCorsOrigins(),
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: [
       'Content-Type',
