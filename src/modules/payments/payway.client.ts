@@ -120,15 +120,21 @@ export class PaywayClient {
       string,
       unknown
     > | null;
-    const paymentId = this.firstString(
-      result?.id,
-      result?.payment_id,
-      result?.hash,
+    // Payway responde {"payment_link": "https://<host>/web/checkout/<id>"}; el id
+    // del pago es el ultimo segmento de esa URL.
+    const linkUrl = this.firstString(
+      result?.payment_link,
+      result?.url,
+      result?.link,
+      result?.checkout_url,
     );
+    const paymentId =
+      this.firstString(result?.id, result?.payment_id, result?.hash) ??
+      this.lastPathSegment(linkUrl);
     // Si Payway no devuelve la URL completa, se arma con el id del pago
     // (https://<host>/web/checkout/{payment_id}, segun el SDK oficial).
     const checkoutUrl =
-      this.firstString(result?.url, result?.link, result?.checkout_url) ??
+      linkUrl ??
       (paymentId
         ? `${endpoints.checkoutForm}/${encodeURIComponent(paymentId)}`
         : undefined);
@@ -208,6 +214,16 @@ export class PaywayClient {
       }
     }
     return undefined;
+  }
+
+  private lastPathSegment(url: string | undefined) {
+    if (!url) return undefined;
+    try {
+      const segment = new URL(url).pathname.split('/').filter(Boolean).pop();
+      return segment ? decodeURIComponent(segment) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private getRequiredConfig(key: string) {

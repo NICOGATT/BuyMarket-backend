@@ -78,12 +78,12 @@ export class PaymentsController {
 
   // Payway parece comprobar que notifications_url responda antes de aceptarla:
   // un GET a esta ruta devuelve 200 sin efectos.
-  @Get(['payway/webhook', 'payway/webhook/:attemptId'])
+  @Get(['hook/:attemptId', 'payway/webhook', 'payway/webhook/:attemptId'])
   paywayWebhookHealth() {
     return { ok: true };
   }
 
-  @Post(['payway/webhook', 'payway/webhook/:attemptId'])
+  @Post(['hook/:attemptId', 'payway/webhook', 'payway/webhook/:attemptId'])
   @HttpCode(HttpStatus.OK)
   handlePaywayWebhook(
     @Param('attemptId') attemptId: string | undefined,

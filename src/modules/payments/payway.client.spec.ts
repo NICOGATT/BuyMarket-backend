@@ -117,6 +117,21 @@ describe('PaywayClient', () => {
     );
   });
 
+  it('lee payment_link y toma el id del ultimo segmento de la URL', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce(
+      response(201, {
+        payment_link: 'https://developers.decidir.com/web/checkout/ABC123',
+      }),
+    );
+
+    const result = await createClient().createPaymentLink(input);
+
+    expect(result).toEqual({
+      paymentId: 'ABC123',
+      checkoutUrl: 'https://developers.decidir.com/web/checkout/ABC123',
+    });
+  });
+
   it('prefiere la url completa que devuelva Payway', async () => {
     jest
       .spyOn(global, 'fetch')

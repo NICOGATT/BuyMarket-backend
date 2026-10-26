@@ -228,9 +228,10 @@ export class PaywayService {
       );
     }
 
-    // El id va en la ruta: Payway rechaza notifications_url con query string.
+    // El id va en la ruta y la ruta no puede contener "payway": Payway rechaza
+    // (param_required) notifications_url con query string o con esa palabra.
     return new URL(
-      `${base.replace(/\/$/, '')}/payments/payway/webhook/${encodeURIComponent(attemptId)}`,
+      `${base.replace(/\/$/, '')}/payments/hook/${encodeURIComponent(attemptId)}`,
     ).toString();
   }
 }

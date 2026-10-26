@@ -143,8 +143,7 @@ describe('PaywayService', () => {
       totalPrice: 2500.5,
       successUrl: 'https://front.test/success?orderId=order-1',
       cancelUrl: 'https://front.test/failure?orderId=order-1',
-      notificationsUrl:
-        'https://api.test/payments/payway/webhook/attempt-1',
+      notificationsUrl: 'https://api.test/payments/hook/attempt-1',
     });
     expect(attemptRepository.save).toHaveBeenLastCalledWith(
       expect.objectContaining({
