@@ -25,6 +25,7 @@ import { PaywayClient } from './payway.client';
 
 const PAYWAY_LINK_TTL_MS = 60 * 60 * 1000;
 const MAX_LOGGED_NOTIFICATION_CHARS = 2000;
+const MAX_DESCRIPTION_CHARS = 100;
 
 @Injectable()
 export class PaywayService {
@@ -99,7 +100,7 @@ export class PaywayService {
 
     const order = await orderRepository.findOne({
       where: { id: lockedOrder.id },
-      relations: ['buyer'],
+      relations: ['buyer', 'items'],
     });
 
     if (!order || order.buyer?.id !== userId) {
@@ -173,7 +174,7 @@ export class PaywayService {
     );
 
     const link = await this.paywayClient.createPaymentLink({
-      description: `Orden ${order.id}`.slice(0, 100),
+      description: this.buildDescription(order),
       totalPrice: Math.round(Number(order.total) * 100) / 100,
       successUrl: this.frontendUrl('FRONTEND_SUCCESS_URL', order.id),
       cancelUrl: this.frontendUrl('FRONTEND_FAILURE_URL', order.id),
@@ -189,6 +190,43 @@ export class PaywayService {
     await orderRepository.save(order);
 
     return this.checkoutResponse(order, attempt);
+  }
+
+  /**
+   * Texto que Payway muestra en el formulario: los productos de la orden con
+   * variante y cantidad. Es una sola linea y se acota a MAX_DESCRIPTION_CHARS;
+   * lo que no entra se resume como "+N mas". Sin items usa el id de la orden.
+   */
+  private buildDescription(order: Order) {
+    const fallback = `Orden ${order.id}`.slice(0, MAX_DESCRIPTION_CHARS);
+    const parts = (order.items ?? []).map((item) => {
+      const variant = [item.variant?.size, item.variant?.color]
+        .filter(Boolean)
+        .join(', ');
+      const title = item.product?.title?.trim() || 'Producto';
+      return `${item.quantity}x ${title}${variant ? ` (${variant})` : ''}`;
+    });
+
+    if (parts.length === 0) return fallback;
+
+    let description = '';
+    for (let index = 0; index < parts.length; index++) {
+      const remaining = parts.length - index - 1;
+      const suffix = remaining > 0 ? ` +${remaining} mas` : '';
+      const next = description
+        ? `${description} · ${parts[index]}`
+        : parts[index];
+      if ((next + suffix).length > MAX_DESCRIPTION_CHARS) {
+        const left = parts.length - index;
+        if (!description) {
+          return `${parts[index].slice(0, MAX_DESCRIPTION_CHARS - 1)}…`;
+        }
+        return `${description} +${left} mas`.slice(0, MAX_DESCRIPTION_CHARS);
+      }
+      description = next;
+    }
+
+    return description;
   }
 
   private checkoutResponse(

@@ -92,6 +92,47 @@ describe('PaywayService', () => {
     });
   });
 
+  it('describe el pago con los productos, variantes y cantidades de la orden', async () => {
+    orderRepository.findOne.mockResolvedValue(
+      buildOrder({
+        items: [
+          {
+            quantity: 2,
+            product: { title: 'Remera' },
+            variant: { size: 'M', color: 'Negro' },
+          },
+          { quantity: 1, product: { title: 'Gorra' }, variant: null },
+        ] as unknown as Order['items'],
+      }),
+    );
+
+    await service.createPaymentLink(orderId, userId);
+
+    expect(paywayClient.createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: '2x Remera (M, Negro) · 1x Gorra',
+      }),
+    );
+  });
+
+  it('acota la descripcion a 100 caracteres resumiendo los productos que no entran', async () => {
+    orderRepository.findOne.mockResolvedValue(
+      buildOrder({
+        items: Array.from({ length: 8 }, (_, index) => ({
+          quantity: 1,
+          product: { title: `Producto largo numero ${index + 1}` },
+          variant: null,
+        })) as unknown as Order['items'],
+      }),
+    );
+
+    await service.createPaymentLink(orderId, userId);
+
+    const { description } = paywayClient.createPaymentLink.mock.calls[0][0];
+    expect(description.length).toBeLessThanOrEqual(100);
+    expect(description).toMatch(/ \+\d+ mas$/);
+  });
+
   it('expone si Payway esta habilitado en capabilities', () => {
     paywayClient.isConfigured.mockReturnValue(false);
 
