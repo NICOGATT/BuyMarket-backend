@@ -37,6 +37,8 @@ import { ColorsService } from '../colors/colors.service';
 import { Color } from '../colors/entities/color.entity';
 import { CreateProductVariantDto } from './dto/create-product.dto';
 import { requiresManualProductApproval } from './product-approval-policy';
+import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
+import { OrderItem } from '../orders/entities/order-item.entity';
 
 type ProductSearchRow = Omit<ProductResult, 'stock' | 'price' | 'currency'> & {
   stock: number | string;
@@ -978,13 +980,32 @@ export class ProductsService {
   }
 
   async remove(id: string) {
-    const product = await this.findOne(id);
+    return this.dataSource.transaction(async (manager) => {
+      const productsRepository = manager.getRepository(Product);
+      const product = await productsRepository.findOne({ where: { id } });
 
-    if (!product) {
-      return null;
-    }
+      if (!product) {
+        throw new NotFoundException('Producto no encontrado');
+      }
 
-    return await this.productsRepository.remove(product);
+      // Los items de carrito referencian al producto sin cascade
+      await manager.getRepository(CartItem).delete({ product: { id } });
+
+      // order_items no guarda snapshot del producto: si ya se vendio,
+      // se desactiva en lugar de borrarlo para no romper el historial
+      const orderItemsCount = await manager
+        .getRepository(OrderItem)
+        .count({ where: { product: { id } } });
+
+      if (orderItemsCount > 0) {
+        await productsRepository.update(id, { isActive: false });
+        product.isActive = false;
+        return product;
+      }
+
+      await productsRepository.delete(id);
+      return product;
+    });
   }
 
   async approve(id: string) {
