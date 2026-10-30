@@ -24,6 +24,8 @@ import { UserAddress } from '../user-address/entities/user-address.entity';
 import { CloudinaryService } from '../../cloudinary/cloudinary.service';
 import { Brand } from '../brands/entities/brand.entity';
 import { ColorsService } from '../colors/colors.service';
+import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
+import { OrderItem } from '../orders/entities/order-item.entity';
 
 type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
@@ -40,6 +42,7 @@ const createMockRepository = <
   save: jest.fn(),
   update: jest.fn(),
   delete: jest.fn(),
+  count: jest.fn(),
   createQueryBuilder: jest.fn(),
 });
 
@@ -54,6 +57,8 @@ describe('ProductsService', () => {
   let subCategoryRepository: MockRepository<SubCategory>;
   let userAddressRepository: MockRepository<UserAddress>;
   let brandRepository: MockRepository<Brand>;
+  let cartItemRepository: MockRepository<CartItem>;
+  let orderItemRepository: MockRepository<OrderItem>;
   let colorsService: { recommendMany: jest.Mock; findByNames: jest.Mock };
   let dataSource: { transaction: jest.Mock };
 
@@ -130,6 +135,8 @@ describe('ProductsService', () => {
     subCategoryRepository = createMockRepository<SubCategory>();
     userAddressRepository = createMockRepository<UserAddress>();
     brandRepository = createMockRepository<Brand>();
+    cartItemRepository = createMockRepository<CartItem>();
+    orderItemRepository = createMockRepository<OrderItem>();
     colorsService = {
       recommendMany: jest.fn().mockImplementation((hexes: string[]) =>
         Promise.resolve(
@@ -150,6 +157,8 @@ describe('ProductsService', () => {
             if (entity === ProductVariantAttributeValue) {
               return productVariantAttributeValueRepository;
             }
+            if (entity === CartItem) return cartItemRepository;
+            if (entity === OrderItem) return orderItemRepository;
             throw new Error(`Repositorio transaccional no mockeado`);
           }),
         }),
@@ -1647,33 +1656,41 @@ describe('ProductsService', () => {
   });
 
   describe('remove', () => {
-    it('elimina un producto existente con remove', async () => {
-      productRepository.findOne?.mockResolvedValue(product);
-      productRepository.remove?.mockResolvedValue(product);
+    it('elimina un producto sin ordenes y limpia los carritos que lo contienen', async () => {
+      productRepository.findOne?.mockResolvedValue({ ...product });
+      orderItemRepository.count?.mockResolvedValue(0);
 
       const result = await service.remove(productId);
 
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(productRepository.findOne).toHaveBeenCalledWith({
         where: { id: productId },
-        relations: {
-          category: true,
-          subCategory: true,
-          brand: true,
-          seller: true,
-          pickupAddress: true,
-          media: true,
-          variants: {
-            attributes: {
-              attribute: true,
-            },
-          },
-          attributeValues: {
-            attribute: true,
-          },
-        },
       });
-      expect(productRepository.remove).toHaveBeenCalledWith(product);
-      expect(result).toEqual(product);
+      expect(cartItemRepository.delete).toHaveBeenCalledWith({
+        product: { id: productId },
+      });
+      expect(orderItemRepository.count).toHaveBeenCalledWith({
+        where: { product: { id: productId } },
+      });
+      expect(productRepository.delete).toHaveBeenCalledWith(productId);
+      expect(productRepository.update).not.toHaveBeenCalled();
+      expect(result.id).toBe(productId);
+    });
+
+    it('desactiva el producto en lugar de borrarlo si ya tiene ordenes', async () => {
+      productRepository.findOne?.mockResolvedValue({ ...product });
+      orderItemRepository.count?.mockResolvedValue(2);
+
+      const result = await service.remove(productId);
+
+      expect(cartItemRepository.delete).toHaveBeenCalledWith({
+        product: { id: productId },
+      });
+      expect(productRepository.update).toHaveBeenCalledWith(productId, {
+        isActive: false,
+      });
+      expect(productRepository.delete).not.toHaveBeenCalled();
+      expect(result.isActive).toBe(false);
     });
 
     it('lanza NotFoundException si el producto a eliminar no existe', async () => {
@@ -1682,7 +1699,8 @@ describe('ProductsService', () => {
       await expect(service.remove(productId)).rejects.toBeInstanceOf(
         NotFoundException,
       );
-      expect(productRepository.remove).not.toHaveBeenCalled();
+      expect(cartItemRepository.delete).not.toHaveBeenCalled();
+      expect(productRepository.delete).not.toHaveBeenCalled();
     });
   });
 });
