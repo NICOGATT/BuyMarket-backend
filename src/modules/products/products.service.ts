@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, In, Repository } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, Not, Repository } from 'typeorm';
 
 import { Product, ProductApprovalStatus } from './entity/product.entity';
 
@@ -39,6 +39,7 @@ import { CreateProductVariantDto } from './dto/create-product.dto';
 import { requiresManualProductApproval } from './product-approval-policy';
 import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
+import { Favorite } from '../favorites/entities/favorite.entity';
 
 type ProductSearchRow = Omit<ProductResult, 'stock' | 'price' | 'currency'> & {
   stock: number | string;
@@ -763,6 +764,7 @@ export class ProductsService {
 
   async findAllForAdmin() {
     const products = await this.productsRepository.find({
+      where: { deletedAt: IsNull() },
       relations: {
         category: true,
         subCategory: true,
@@ -789,7 +791,7 @@ export class ProductsService {
 
   async findOne(id: string) {
     const product = await this.productsRepository.findOne({
-      where: { id },
+      where: { id, deletedAt: IsNull() },
       relations: {
         category: true,
         subCategory: true,
@@ -860,6 +862,16 @@ export class ProductsService {
       stock,
       ...rest
     } = updateProductDto;
+
+    // Un producto borrado logicamente no se puede editar ni reactivar
+    const isDeleted = await this.productsRepository.exists({
+      where: { id, deletedAt: Not(IsNull()) },
+    });
+
+    if (isDeleted) {
+      throw new NotFoundException('Producto no encontrado');
+    }
+
     const normalizedVariants = await this.normalizeVariantColors(variants);
     const productTotals =
       normalizedVariants === undefined
@@ -982,7 +994,9 @@ export class ProductsService {
   async remove(id: string) {
     return this.dataSource.transaction(async (manager) => {
       const productsRepository = manager.getRepository(Product);
-      const product = await productsRepository.findOne({ where: { id } });
+      const product = await productsRepository.findOne({
+        where: { id, deletedAt: IsNull() },
+      });
 
       if (!product) {
         throw new NotFoundException('Producto no encontrado');
@@ -992,14 +1006,18 @@ export class ProductsService {
       await manager.getRepository(CartItem).delete({ product: { id } });
 
       // order_items no guarda snapshot del producto: si ya se vendio,
-      // se desactiva en lugar de borrarlo para no romper el historial
+      // se borra logicamente para no romper ordenes ni pagos al vendedor
       const orderItemsCount = await manager
         .getRepository(OrderItem)
         .count({ where: { product: { id } } });
 
       if (orderItemsCount > 0) {
-        await productsRepository.update(id, { isActive: false });
+        const deletedAt = new Date();
+
+        await manager.getRepository(Favorite).delete({ product: { id } });
+        await productsRepository.update(id, { isActive: false, deletedAt });
         product.isActive = false;
+        product.deletedAt = deletedAt;
         return product;
       }
 
@@ -1010,7 +1028,7 @@ export class ProductsService {
 
   async approve(id: string) {
     const product = await this.productsRepository.findOne({
-      where: { id },
+      where: { id, deletedAt: IsNull() },
     });
 
     if (!product) {
@@ -1027,7 +1045,7 @@ export class ProductsService {
 
   async reject(id: string) {
     const product = await this.productsRepository.findOne({
-      where: { id },
+      where: { id, deletedAt: IsNull() },
     });
 
     if (!product) {
@@ -1044,7 +1062,7 @@ export class ProductsService {
 
   async uploadProductMedia(productId: string, files: Express.Multer.File[]) {
     const product = await this.productsRepository.findOne({
-      where: { id: productId },
+      where: { id: productId, deletedAt: IsNull() },
     });
 
     if (!product) {
@@ -1083,6 +1101,7 @@ export class ProductsService {
         seller: {
           id: userId,
         },
+        deletedAt: IsNull(),
       },
       relations: {
         seller: true,

@@ -2,7 +2,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Brackets, DataSource, ObjectLiteral, Repository } from 'typeorm';
+import {
+  Brackets,
+  DataSource,
+  IsNull,
+  ObjectLiteral,
+  Repository,
+} from 'typeorm';
 
 import { Category } from '../categories/entities/category.entity';
 import {
@@ -26,6 +32,7 @@ import { Brand } from '../brands/entities/brand.entity';
 import { ColorsService } from '../colors/colors.service';
 import { CartItem } from '../carts/entities/cart-item.entity/cart-item.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
+import { Favorite } from '../favorites/entities/favorite.entity';
 
 type MockRepository<T extends ObjectLiteral = ObjectLiteral> = Partial<
   Record<keyof Repository<T>, jest.Mock>
@@ -43,6 +50,7 @@ const createMockRepository = <
   update: jest.fn(),
   delete: jest.fn(),
   count: jest.fn(),
+  exists: jest.fn(),
   createQueryBuilder: jest.fn(),
 });
 
@@ -59,6 +67,7 @@ describe('ProductsService', () => {
   let brandRepository: MockRepository<Brand>;
   let cartItemRepository: MockRepository<CartItem>;
   let orderItemRepository: MockRepository<OrderItem>;
+  let favoriteRepository: MockRepository<Favorite>;
   let colorsService: { recommendMany: jest.Mock; findByNames: jest.Mock };
   let dataSource: { transaction: jest.Mock };
 
@@ -137,6 +146,7 @@ describe('ProductsService', () => {
     brandRepository = createMockRepository<Brand>();
     cartItemRepository = createMockRepository<CartItem>();
     orderItemRepository = createMockRepository<OrderItem>();
+    favoriteRepository = createMockRepository<Favorite>();
     colorsService = {
       recommendMany: jest.fn().mockImplementation((hexes: string[]) =>
         Promise.resolve(
@@ -159,6 +169,7 @@ describe('ProductsService', () => {
             }
             if (entity === CartItem) return cartItemRepository;
             if (entity === OrderItem) return orderItemRepository;
+            if (entity === Favorite) return favoriteRepository;
             throw new Error(`Repositorio transaccional no mockeado`);
           }),
         }),
@@ -270,7 +281,7 @@ describe('ProductsService', () => {
       );
       expect(productRepository.save).toHaveBeenCalledWith(productToSave);
       expect(productRepository.findOne).toHaveBeenCalledWith({
-        where: { id: savedProduct.id },
+        where: { id: savedProduct.id, deletedAt: IsNull() },
         relations: {
           category: true,
           subCategory: true,
@@ -1143,7 +1154,7 @@ describe('ProductsService', () => {
       const result = await service.findOne(productId);
 
       expect(productRepository.findOne).toHaveBeenCalledWith({
-        where: { id: productId },
+        where: { id: productId, deletedAt: IsNull() },
         relations: {
           category: true,
           subCategory: true,
@@ -1199,7 +1210,7 @@ describe('ProductsService', () => {
         },
       });
       expect(productRepository.findOne).toHaveBeenCalledWith({
-        where: { id: productId },
+        where: { id: productId, deletedAt: IsNull() },
         relations: {
           category: true,
           subCategory: true,
@@ -1655,6 +1666,18 @@ describe('ProductsService', () => {
     });
   });
 
+  describe('update de un producto borrado', () => {
+    it('rechaza editar un producto borrado logicamente', async () => {
+      productRepository.exists?.mockResolvedValue(true);
+
+      await expect(
+        service.update(productId, { title: 'Nuevo titulo' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(productRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('remove', () => {
     it('elimina un producto sin ordenes y limpia los carritos que lo contienen', async () => {
       productRepository.findOne?.mockResolvedValue({ ...product });
@@ -1664,7 +1687,7 @@ describe('ProductsService', () => {
 
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(productRepository.findOne).toHaveBeenCalledWith({
-        where: { id: productId },
+        where: { id: productId, deletedAt: IsNull() },
       });
       expect(cartItemRepository.delete).toHaveBeenCalledWith({
         product: { id: productId },
@@ -1674,10 +1697,11 @@ describe('ProductsService', () => {
       });
       expect(productRepository.delete).toHaveBeenCalledWith(productId);
       expect(productRepository.update).not.toHaveBeenCalled();
+      expect(favoriteRepository.delete).not.toHaveBeenCalled();
       expect(result.id).toBe(productId);
     });
 
-    it('desactiva el producto en lugar de borrarlo si ya tiene ordenes', async () => {
+    it('borra logicamente el producto si ya tiene ordenes', async () => {
       productRepository.findOne?.mockResolvedValue({ ...product });
       orderItemRepository.count?.mockResolvedValue(2);
 
@@ -1686,11 +1710,16 @@ describe('ProductsService', () => {
       expect(cartItemRepository.delete).toHaveBeenCalledWith({
         product: { id: productId },
       });
+      expect(favoriteRepository.delete).toHaveBeenCalledWith({
+        product: { id: productId },
+      });
       expect(productRepository.update).toHaveBeenCalledWith(productId, {
         isActive: false,
+        deletedAt: expect.any(Date),
       });
       expect(productRepository.delete).not.toHaveBeenCalled();
       expect(result.isActive).toBe(false);
+      expect(result.deletedAt).toBeInstanceOf(Date);
     });
 
     it('lanza NotFoundException si el producto a eliminar no existe', async () => {

@@ -4,7 +4,7 @@ import { UpdateFavoriteDto } from './dto/update-favorite.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Favorite } from './entities/favorite.entity';
 import { Product } from '../products/entity/product.entity';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { User } from '../users/entity/user.entity';
 import { throwError } from 'rxjs';
 
@@ -43,7 +43,7 @@ export class FavoritesService {
     }
 
     const product = await this.productsRepository.findOne({
-      where : {id : productId}
+      where : {id : productId, deletedAt : IsNull()}
     })
 
     if(!product) throw new NotFoundException("Producto no encontrado"); 

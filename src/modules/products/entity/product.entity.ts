@@ -103,6 +103,15 @@ export class Product {
   })
   pickupAddress?: UserAddress | null;
 
+  /**
+   * Borrado logico de productos que ya tienen ordenes. Es un Column comun y
+   * no un DeleteDateColumn a proposito: TypeORM excluye las entidades con
+   * DeleteDateColumn tambien en los joins, y ordenes/pagos necesitan seguir
+   * cargando item.product.
+   */
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  deletedAt?: Date | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

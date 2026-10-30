@@ -86,7 +86,7 @@ export class CartsService {
     const cart = await this.getCartByUser(userId);
 
     const product = await this.productsRepository.findOne({
-      where: { id: productId },
+      where: { id: productId, deletedAt: IsNull() },
       relations: ['variants'],
     });
 
